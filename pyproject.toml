@@ -17,6 +17,13 @@ build = [
     "pyinstaller>=6.0; python_version >= '3.10'",
 ]
 
+# Linux/WSL では uv 管理 Python (python-build-standalone) の Tk が Xft 非対応で
+# 日本語が文字化けするため、Xft 対応 Tk を持つシステム Python (python3-tk) を優先する。
+# システム Python が無い環境 (Windows 等) では従来どおり uv 管理 Python に
+# フォールバックする (Windows の Tk は GDI 描画なので問題なし)。
+[tool.uv]
+python-preference = "system"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

@@ -68,7 +68,7 @@ python serial_terminal.py
 | 環境 | 補足 |
 |---|---|
 | Windows | Python 3.9+ (tkinter同梱)。ポートは `COM3` 等 |
-| Ubuntu | uv 利用時は tkinter 同梱の Python を自動取得するので追加パッケージ不要。pip 利用時は `sudo apt install python3-tk` が必要。シリアル権限: `sudo usermod -aG dialout $USER` (要再ログイン) |
+| Ubuntu / WSL | `sudo apt install python3-tk` が必要 (uv / pip 共通)。日本語表示には `fonts-noto-cjk` も推奨。シリアル権限: `sudo usermod -aG dialout $USER` (要再ログイン) |
 | WSL2 | WSLg (Windows 11) でGUI表示可。USBシリアルは [usbipd-win](https://github.com/dorssel/usbipd-win) で `usbipd attach --wsl` するとWSL側に `/dev/ttyUSB*` として見える |
 | macOS | ポート名は `/dev/cu.usbserial-*` 系。tkが古い場合は `brew install python-tk` |
 
