@@ -21,9 +21,12 @@ Serial Binary/ASCII Terminal
 
 import codecs
 import json
+import locale
+import os
 import queue
 import threading
 from datetime import datetime
+from pathlib import Path
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -44,14 +47,17 @@ BAUDRATES = ["300", "1200", "2400", "4800", "9600", "19200", "38400",
              "57600", "115200", "230400", "460800", "921600",
              "1000000", "2000000"]
 
-LINE_ENDINGS = {            # 送信時に付加する改行
-    "なし":          b"",
-    "LF (\\n)":      b"\n",
-    "CR (\\r)":      b"\r",
-    "CRLF (\\r\\n)": b"\r\n",
+# 送信時に付加する改行 (内部コード → bytes)。表示文字列は tr("eol_<code>") で得る。
+TX_EOL_BYTES = {
+    "none": b"",
+    "lf":   b"\n",
+    "cr":   b"\r",
+    "crlf": b"\r\n",
 }
+TX_EOL_CODES = list(TX_EOL_BYTES)
 
-RX_NEWLINE_MODES = ["そのまま", "CR→LF変換", "CR削除"]   # 受信表示時の改行の扱い
+# 受信表示時の改行の扱い (内部コード)。表示文字列は tr("rxnl_<code>") で得る。
+RX_NEWLINE_CODES = ["raw", "cr_to_lf", "strip_cr"]
 
 PARITIES  = {"None": serial.PARITY_NONE,
              "Even": serial.PARITY_EVEN,
@@ -65,6 +71,215 @@ BYTESIZES = {"8": serial.EIGHTBITS, "7": serial.SEVENBITS,
 MONO_FONT = ("Consolas", 10) if tk.TkVersion else ("Courier", 10)
 
 
+# ------------------------------------------------------------------ i18n ----
+
+LANGUAGES = ("ja", "en")
+
+I18N = {
+    # --- アプリ / トップバー ---
+    "add_tab":        {"ja": "＋ ポートタブを追加", "en": "+ Add port tab"},
+    "tab_hint":       {"ja": "  各タブが1つのCOMポートに対応します",
+                       "en": "  Each tab handles one COM port"},
+    "lang_label":     {"ja": "言語:", "en": "Language:"},
+    # --- 接続バー ---
+    "port":           {"ja": "ポート:", "en": "Port:"},
+    "refresh":        {"ja": "更新", "en": "Refresh"},
+    "connect":        {"ja": "接続", "en": "Connect"},
+    "disconnect":     {"ja": "切断", "en": "Disconnect"},
+    "close_tab":      {"ja": "タブを閉じる", "en": "Close Tab"},
+    # --- 設定バー ---
+    "encoding":       {"ja": "エンコード:", "en": "Encoding:"},
+    "tx_eol":         {"ja": "送信改行:", "en": "TX EOL:"},
+    "rx_nl":          {"ja": "受信改行:", "en": "RX EOL:"},
+    "hexview":        {"ja": "バイナリ(HEX)ビュー", "en": "Binary (HEX) view"},
+    "local_echo":     {"ja": "ローカルエコー", "en": "Local echo"},
+    "autoscroll":     {"ja": "自動スクロール", "en": "Auto scroll"},
+    "clear_view":     {"ja": "表示クリア", "en": "Clear view"},
+    # --- 保存メニュー ---
+    "save_menu":      {"ja": "保存 ▾", "en": "Save ▾"},
+    "save_rx_bin":    {"ja": "受信データをバイナリ保存 (.bin)",
+                       "en": "Save RX data as binary (.bin)"},
+    "save_rx_txt":    {"ja": "受信データをテキスト保存 (現在のエンコード)",
+                       "en": "Save RX data as text (current encoding)"},
+    "save_tx_bin":    {"ja": "送信データをバイナリ保存 (.bin)",
+                       "en": "Save TX data as binary (.bin)"},
+    "save_tx_txt":    {"ja": "送信データをテキスト保存",
+                       "en": "Save TX data as text"},
+    "save_log":       {"ja": "送受信ログ保存 (時刻+方向+HEX+ASCII)",
+                       "en": "Save session log (time+dir+HEX+ASCII)"},
+    "rawlog":         {"ja": "受信RAWを連続ログ (ファイルへ逐次追記)",
+                       "en": "Continuous RAW RX log (append to file)"},
+    # --- メイン領域 ---
+    "rx_frame":       {"ja": "受信", "en": "Receive"},
+    "tx_frame":       {"ja": "送信", "en": "Send"},
+    "tx_hex_radio":   {"ja": "HEX (例: AA BB 0D 0A)",
+                       "en": "HEX (e.g. AA BB 0D 0A)"},
+    "tx_hint":        {"ja": "  Ctrl+Enterで送信", "en": "  Ctrl+Enter to send"},
+    "send":           {"ja": "送信", "en": "Send"},
+    # --- 定型文 ---
+    "macro_frame":    {"ja": "定型文 (ダブルクリックで送信)",
+                       "en": "Macros (double-click to send)"},
+    "m_name":         {"ja": "名前", "en": "Name"},
+    "m_mode":         {"ja": "形式", "en": "Format"},
+    "m_data":         {"ja": "データ", "en": "Data"},
+    "m_add":          {"ja": "追加", "en": "Add"},
+    "m_edit":         {"ja": "編集", "en": "Edit"},
+    "m_delete":       {"ja": "削除", "en": "Delete"},
+    "m_load":         {"ja": "読込", "en": "Load"},
+    "m_save":         {"ja": "保存", "en": "Save"},
+    # --- 定型文ダイアログ ---
+    "dlg_macro_add":  {"ja": "定型文の追加", "en": "Add Macro"},
+    "dlg_macro_edit": {"ja": "定型文の編集", "en": "Edit Macro"},
+    "d_name":         {"ja": "名前:", "en": "Name:"},
+    "d_mode":         {"ja": "形式:", "en": "Format:"},
+    "d_data":         {"ja": "データ:", "en": "Data:"},
+    "d_ending":       {"ja": "送信時に改行設定を付加する (ASCIIのみ有効)",
+                       "en": "Append line ending on send (ASCII only)"},
+    "d_cancel":       {"ja": "キャンセル", "en": "Cancel"},
+    # --- 改行の表示名 ---
+    "eol_none":       {"ja": "なし", "en": "None"},
+    "eol_lf":         {"ja": "LF (\\n)", "en": "LF (\\n)"},
+    "eol_cr":         {"ja": "CR (\\r)", "en": "CR (\\r)"},
+    "eol_crlf":       {"ja": "CRLF (\\r\\n)", "en": "CRLF (\\r\\n)"},
+    "rxnl_raw":       {"ja": "そのまま", "en": "As-is"},
+    "rxnl_cr_to_lf":  {"ja": "CR→LF変換", "en": "CR→LF"},
+    "rxnl_strip_cr":  {"ja": "CR削除", "en": "Strip CR"},
+    # --- ステータス ---
+    "not_connected":  {"ja": "未接続", "en": "Not connected"},
+    "st_open_fmt":    {"ja": "%s @ %s bps  接続中", "en": "%s @ %s bps  connected"},
+    "st_saved":       {"ja": "保存しました: ", "en": "Saved: "},
+    # --- メッセージボックス ---
+    "mb_connect_title":    {"ja": "接続", "en": "Connect"},
+    "mb_select_port":      {"ja": "ポートを選択してください。",
+                            "en": "Please select a port."},
+    "mb_conn_err_title":   {"ja": "接続エラー", "en": "Connection Error"},
+    "mb_disconnect_title": {"ja": "切断", "en": "Disconnected"},
+    "mb_conn_lost":        {"ja": "ポートとの接続が失われました。",
+                            "en": "Connection to the port was lost."},
+    "mb_confirm_title":    {"ja": "確認", "en": "Confirm"},
+    "mb_close_confirm":    {"ja": "ポートが開いています。切断してタブを閉じますか?",
+                            "en": "The port is open. Disconnect and close this tab?"},
+    "mb_send_title":       {"ja": "送信", "en": "Send"},
+    "mb_port_not_open":    {"ja": "ポートが開いていません。",
+                            "en": "The port is not open."},
+    "mb_send_err_title":   {"ja": "送信エラー", "en": "Send Error"},
+    "mb_tx_data_err_title": {"ja": "送信データエラー", "en": "TX Data Error"},
+    "mb_macro_err_title":  {"ja": "定型文エラー", "en": "Macro Error"},
+    "mb_load_err_title":   {"ja": "読込エラー", "en": "Load Error"},
+    "mb_save_title":       {"ja": "保存", "en": "Save"},
+    "mb_no_data":          {"ja": "保存するデータがありません。",
+                            "en": "No data to save."},
+    "mb_no_log":           {"ja": "ログがありません。", "en": "No log entries."},
+    "mb_clear_title":      {"ja": "クリア", "en": "Clear"},
+    "mb_clear_buffers":    {"ja": "保存用の送受信バッファも消去しますか?",
+                            "en": "Also clear the stored RX/TX buffers?"},
+    "mb_enc_title":        {"ja": "エンコード", "en": "Encoding"},
+    "mb_enc_unsupported":  {"ja": "未対応のエンコードです: ",
+                            "en": "Unsupported encoding: "},
+    "mb_log_title":        {"ja": "ログ", "en": "Log"},
+    "err_input_title":     {"ja": "入力エラー", "en": "Input Error"},
+    "err_name_required":   {"ja": "名前を入力してください。",
+                            "en": "Please enter a name."},
+    "err_hex_title":       {"ja": "HEXエラー", "en": "HEX Error"},
+    "err_hex_odd":         {"ja": "HEX文字列の桁数が奇数です: %r",
+                            "en": "Odd number of hex digits: %r"},
+    "err_hex_invalid":     {"ja": "HEXとして解釈できない文字が含まれています: %r",
+                            "en": "Contains characters that cannot be parsed as hex: %r"},
+    # --- ファイルダイアログのフィルタ名 ---
+    "ft_json":  {"ja": "JSON", "en": "JSON"},
+    "ft_all":   {"ja": "すべて", "en": "All files"},
+    "ft_bin":   {"ja": "バイナリ", "en": "Binary"},
+    "ft_txt":   {"ja": "テキスト", "en": "Text"},
+    "ft_log":   {"ja": "ログ", "en": "Log"},
+}
+
+_current_lang = "ja"
+_retranslate_callbacks = []     # 言語切替時に呼ぶコールバック
+
+
+def get_language() -> str:
+    return _current_lang
+
+
+def set_language(lang: str):
+    global _current_lang
+    if lang not in LANGUAGES:
+        raise ValueError("unsupported language: %r" % lang)
+    _current_lang = lang
+
+
+def tr(key: str) -> str:
+    """翻訳キーから現在言語の文字列を返す。キー欠落時はキーをそのまま返す。"""
+    entry = I18N.get(key)
+    if entry is None:
+        return key
+    return entry[_current_lang]
+
+
+def on_language_change(callback):
+    """言語切替時に呼ばれるコールバックを登録する。"""
+    _retranslate_callbacks.append(callback)
+
+
+def retranslate_all():
+    """登録済みコールバックを全実行。破棄済みウィジェット由来のものは除去。"""
+    for cb in _retranslate_callbacks[:]:
+        try:
+            cb()
+        except tk.TclError:
+            _retranslate_callbacks.remove(cb)
+
+
+def T(widget, key: str, option: str = "text"):
+    """ウィジェットのオプションに tr(key) を設定し、言語切替に追従させる。"""
+    def apply():
+        widget.configure(**{option: tr(key)})
+    apply()
+    on_language_change(apply)
+    return widget
+
+
+def detect_default_language() -> str:
+    """OSロケールが日本語なら ja、それ以外 (不明含む) は en。"""
+    try:
+        lang = locale.getlocale()[0]
+    except ValueError:
+        lang = None
+    if lang and lang.lower().startswith("ja"):
+        return "ja"
+    return "en"
+
+
+# ------------------------------------------------------------------ 設定 ----
+
+def settings_path() -> Path:
+    if os.name == "nt":
+        base = Path(os.environ.get("APPDATA", str(Path.home())))
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME",
+                                   str(Path.home() / ".config")))
+    return base / "serial-terminal" / "settings.json"
+
+
+def load_settings() -> dict:
+    try:
+        with open(settings_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(settings: dict):
+    try:
+        path = settings_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
 # ----------------------------------------------------------- ユーティリティ ----
 
 def parse_hex(text: str) -> bytes:
@@ -75,11 +290,11 @@ def parse_hex(text: str) -> bytes:
     if not cleaned:
         return b""
     if len(cleaned) % 2 != 0:
-        raise ValueError("HEX文字列の桁数が奇数です: %r" % text)
+        raise ValueError(tr("err_hex_odd") % text)
     try:
         return bytes.fromhex(cleaned)
     except ValueError:
-        raise ValueError("HEXとして解釈できない文字が含まれています: %r" % text)
+        raise ValueError(tr("err_hex_invalid") % text)
 
 
 def hexdump_lines(offset: int, data: bytes):
@@ -95,17 +310,20 @@ def hexdump_lines(offset: int, data: bytes):
 
 
 class NewlineFilter:
-    """受信テキスト表示用の改行変換(チャンク分割されたCRLFにも対応)。"""
+    """受信テキスト表示用の改行変換(チャンク分割されたCRLFにも対応)。
+
+    mode は言語非依存コード: "raw" / "cr_to_lf" / "strip_cr"
+    """
 
     def __init__(self):
-        self.mode = "そのまま"
+        self.mode = "raw"
         self._pending_cr = False
 
     def reset(self):
         self._pending_cr = False
 
     def feed(self, text: str) -> str:
-        if self.mode == "そのまま":
+        if self.mode == "raw":
             return text
         if self._pending_cr:
             text = "\r" + text
@@ -113,17 +331,17 @@ class NewlineFilter:
         if text.endswith("\r"):
             self._pending_cr = True
             text = text[:-1]
-        if self.mode == "CR→LF変換":
+        if self.mode == "cr_to_lf":
             text = text.replace("\r\n", "\n").replace("\r", "\n")
-        elif self.mode == "CR削除":
+        elif self.mode == "strip_cr":
             text = text.replace("\r", "")
         return text
 
     def convert_all(self, text: str) -> str:
         """バッファ全体の再デコード用(ステートレス変換)。"""
-        if self.mode == "CR→LF変換":
+        if self.mode == "cr_to_lf":
             return text.replace("\r\n", "\n").replace("\r", "\n")
-        if self.mode == "CR削除":
+        if self.mode == "strip_cr":
             return text.replace("\r", "")
         return text
 
@@ -133,9 +351,9 @@ class NewlineFilter:
 class MacroDialog(tk.Toplevel):
     """定型文の追加・編集用ダイアログ。"""
 
-    def __init__(self, master, title="定型文の編集", macro=None):
+    def __init__(self, master, title_key="dlg_macro_edit", macro=None):
         super().__init__(master)
-        self.title(title)
+        self.title(tr(title_key))
         self.resizable(True, False)
         self.transient(master)
         self.grab_set()
@@ -146,12 +364,12 @@ class MacroDialog(tk.Toplevel):
         frm.pack(fill="both", expand=True)
         frm.columnconfigure(1, weight=1)
 
-        ttk.Label(frm, text="名前:").grid(row=0, column=0, sticky="w")
+        ttk.Label(frm, text=tr("d_name")).grid(row=0, column=0, sticky="w")
         self.name_var = tk.StringVar(value=macro["name"])
         ttk.Entry(frm, textvariable=self.name_var, width=32)\
             .grid(row=0, column=1, sticky="ew", pady=2)
 
-        ttk.Label(frm, text="形式:").grid(row=1, column=0, sticky="w")
+        ttk.Label(frm, text=tr("d_mode")).grid(row=1, column=0, sticky="w")
         self.mode_var = tk.StringVar(value=macro["mode"])
         mf = ttk.Frame(frm)
         mf.grid(row=1, column=1, sticky="w")
@@ -160,20 +378,20 @@ class MacroDialog(tk.Toplevel):
         ttk.Radiobutton(mf, text="HEX", variable=self.mode_var,
                         value="hex").pack(side="left", padx=(8, 0))
 
-        ttk.Label(frm, text="データ:").grid(row=2, column=0, sticky="nw", pady=(4, 0))
+        ttk.Label(frm, text=tr("d_data")).grid(row=2, column=0, sticky="nw", pady=(4, 0))
         self.data_text = tk.Text(frm, width=46, height=4, font=MONO_FONT)
         self.data_text.grid(row=2, column=1, sticky="ew", pady=(4, 0))
         self.data_text.insert("1.0", macro["data"])
 
         self.ending_var = tk.BooleanVar(value=macro.get("ending", True))
-        ttk.Checkbutton(frm, text="送信時に改行設定を付加する (ASCIIのみ有効)",
+        ttk.Checkbutton(frm, text=tr("d_ending"),
                         variable=self.ending_var)\
             .grid(row=3, column=1, sticky="w", pady=(4, 0))
 
         btns = ttk.Frame(frm)
         btns.grid(row=4, column=0, columnspan=2, sticky="e", pady=(10, 0))
         ttk.Button(btns, text="OK", command=self._ok).pack(side="left", padx=4)
-        ttk.Button(btns, text="キャンセル", command=self.destroy).pack(side="left")
+        ttk.Button(btns, text=tr("d_cancel"), command=self.destroy).pack(side="left")
 
         self.bind("<Escape>", lambda e: self.destroy())
         self.data_text.focus_set()
@@ -182,13 +400,14 @@ class MacroDialog(tk.Toplevel):
         name = self.name_var.get().strip()
         data = self.data_text.get("1.0", "end-1c")
         if not name:
-            messagebox.showwarning("入力エラー", "名前を入力してください。", parent=self)
+            messagebox.showwarning(tr("err_input_title"), tr("err_name_required"),
+                                   parent=self)
             return
         if self.mode_var.get() == "hex":
             try:
                 parse_hex(data)
             except ValueError as e:
-                messagebox.showerror("HEXエラー", str(e), parent=self)
+                messagebox.showerror(tr("err_hex_title"), str(e), parent=self)
                 return
         self.result = {"name": name, "mode": self.mode_var.get(),
                        "data": data, "ending": self.ending_var.get()}
@@ -233,12 +452,12 @@ class PortTab(ttk.Frame):
         bar1 = ttk.Frame(self, padding=(6, 4))
         bar1.pack(fill="x")
 
-        ttk.Label(bar1, text="ポート:").pack(side="left")
+        T(ttk.Label(bar1), "port").pack(side="left")
         self.port_var = tk.StringVar()
         self.port_cmb = ttk.Combobox(bar1, textvariable=self.port_var, width=22)
         self.port_cmb.pack(side="left", padx=(2, 2))
-        ttk.Button(bar1, text="更新", width=5,
-                   command=self.refresh_ports).pack(side="left", padx=(0, 8))
+        T(ttk.Button(bar1, width=7, command=self.refresh_ports),
+          "refresh").pack(side="left", padx=(0, 8))
 
         ttk.Label(bar1, text="Baud:").pack(side="left")
         self.baud_var = tk.StringVar(value="115200")
@@ -260,73 +479,83 @@ class PortTab(ttk.Frame):
         ttk.Combobox(bar1, textvariable=self.stop_var, values=list(STOPBITS),
                      width=4, state="readonly").pack(side="left", padx=(2, 8))
 
-        self.conn_btn = ttk.Button(bar1, text="接続", width=8,
+        self.conn_btn = ttk.Button(bar1, width=10,
                                    command=self.toggle_connection)
         self.conn_btn.pack(side="left", padx=(4, 8))
 
-        ttk.Button(bar1, text="タブを閉じる", command=self.close_tab)\
-            .pack(side="right")
+        T(ttk.Button(bar1, command=self.close_tab), "close_tab").pack(side="right")
 
         # ---- 設定バー ----
         bar2 = ttk.Frame(self, padding=(6, 0))
         bar2.pack(fill="x")
 
-        ttk.Label(bar2, text="エンコード:").pack(side="left")
+        T(ttk.Label(bar2), "encoding").pack(side="left")
         self.enc_var = tk.StringVar(value="utf-8")
         enc_cmb = ttk.Combobox(bar2, textvariable=self.enc_var, values=ENCODINGS,
                                width=10, state="readonly")
         enc_cmb.pack(side="left", padx=(2, 8))
         enc_cmb.bind("<<ComboboxSelected>>", lambda e: self._change_encoding())
 
-        ttk.Label(bar2, text="送信改行:").pack(side="left")
-        self.tx_eol_var = tk.StringVar(value="LF (\\n)")
-        ttk.Combobox(bar2, textvariable=self.tx_eol_var,
-                     values=list(LINE_ENDINGS), width=11, state="readonly")\
-            .pack(side="left", padx=(2, 8))
+        # 送信改行 / 受信改行: 内部コードを保持し、表示文字列は言語切替で再生成する
+        T(ttk.Label(bar2), "tx_eol").pack(side="left")
+        self.tx_eol_code = "lf"
+        self.tx_eol_var = tk.StringVar()
+        self.tx_eol_combo = ttk.Combobox(bar2, textvariable=self.tx_eol_var,
+                                         width=11, state="readonly")
+        self.tx_eol_combo.pack(side="left", padx=(2, 8))
+        self.tx_eol_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: setattr(self, "tx_eol_code",
+                              TX_EOL_CODES[self.tx_eol_combo.current()]))
 
-        ttk.Label(bar2, text="受信改行:").pack(side="left")
-        self.rx_nl_var = tk.StringVar(value="そのまま")
-        rxnl = ttk.Combobox(bar2, textvariable=self.rx_nl_var,
-                            values=RX_NEWLINE_MODES, width=10, state="readonly")
-        rxnl.pack(side="left", padx=(2, 8))
-        rxnl.bind("<<ComboboxSelected>>", lambda e: self._change_rx_newline())
+        T(ttk.Label(bar2), "rx_nl").pack(side="left")
+        self.rx_nl_var = tk.StringVar()
+        self.rx_nl_combo = ttk.Combobox(bar2, textvariable=self.rx_nl_var,
+                                        width=10, state="readonly")
+        self.rx_nl_combo.pack(side="left", padx=(2, 8))
+        self.rx_nl_combo.bind("<<ComboboxSelected>>",
+                              lambda e: self._change_rx_newline())
+        self._retranslate_combos()
 
         self.hexview_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(bar2, text="バイナリ(HEX)ビュー", variable=self.hexview_var,
-                        command=self._toggle_hexview).pack(side="left", padx=(0, 8))
+        T(ttk.Checkbutton(bar2, variable=self.hexview_var,
+                          command=self._toggle_hexview),
+          "hexview").pack(side="left", padx=(0, 8))
 
         self.echo_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(bar2, text="ローカルエコー",
-                        variable=self.echo_var).pack(side="left", padx=(0, 8))
+        T(ttk.Checkbutton(bar2, variable=self.echo_var),
+          "local_echo").pack(side="left", padx=(0, 8))
 
         self.autoscroll_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(bar2, text="自動スクロール",
-                        variable=self.autoscroll_var).pack(side="left", padx=(0, 8))
+        T(ttk.Checkbutton(bar2, variable=self.autoscroll_var),
+          "autoscroll").pack(side="left", padx=(0, 8))
 
-        ttk.Button(bar2, text="表示クリア", command=self.clear_views)\
-            .pack(side="left", padx=(0, 8))
+        T(ttk.Button(bar2, command=self.clear_views),
+          "clear_view").pack(side="left", padx=(0, 8))
 
         # 保存メニュー
-        save_mb = ttk.Menubutton(bar2, text="保存 ▾")
+        save_mb = T(ttk.Menubutton(bar2), "save_menu")
         save_menu = tk.Menu(save_mb, tearoff=False)
-        save_menu.add_command(label="受信データをバイナリ保存 (.bin)",
-                              command=lambda: self.save_data("rx", "bin"))
-        save_menu.add_command(label="受信データをテキスト保存 (現在のエンコード)",
-                              command=lambda: self.save_data("rx", "txt"))
+        save_menu.add_command(command=lambda: self.save_data("rx", "bin"))
+        save_menu.add_command(command=lambda: self.save_data("rx", "txt"))
         save_menu.add_separator()
-        save_menu.add_command(label="送信データをバイナリ保存 (.bin)",
-                              command=lambda: self.save_data("tx", "bin"))
-        save_menu.add_command(label="送信データをテキスト保存",
-                              command=lambda: self.save_data("tx", "txt"))
+        save_menu.add_command(command=lambda: self.save_data("tx", "bin"))
+        save_menu.add_command(command=lambda: self.save_data("tx", "txt"))
         save_menu.add_separator()
-        save_menu.add_command(label="送受信ログ保存 (時刻+方向+HEX+ASCII)",
-                              command=self.save_session_log)
+        save_menu.add_command(command=self.save_session_log)
         save_menu.add_separator()
         self.rawlog_var = tk.BooleanVar(value=False)
-        save_menu.add_checkbutton(label="受信RAWを連続ログ (ファイルへ逐次追記)",
-                                  variable=self.rawlog_var,
+        save_menu.add_checkbutton(variable=self.rawlog_var,
                                   command=self._toggle_rawlog)
         save_mb["menu"] = save_menu
+
+        def relabel_save_menu():
+            for index, key in ((0, "save_rx_bin"), (1, "save_rx_txt"),
+                               (3, "save_tx_bin"), (4, "save_tx_txt"),
+                               (6, "save_log"), (8, "rawlog")):
+                save_menu.entryconfigure(index, label=tr(key))
+        relabel_save_menu()
+        on_language_change(relabel_save_menu)
         save_mb.pack(side="left")
 
         # ---- メイン領域: 左=送受信 / 右=定型文 ----
@@ -340,7 +569,7 @@ class PortTab(ttk.Frame):
         vpane.pack(fill="both", expand=True)
 
         # 受信エリア (ASCII | HEX)
-        rx_frame = ttk.LabelFrame(vpane, text="受信", padding=2)
+        rx_frame = T(ttk.LabelFrame(vpane, padding=2), "rx_frame")
         vpane.add(rx_frame, weight=4)
 
         self.rx_pane = ttk.PanedWindow(rx_frame, orient="horizontal")
@@ -354,7 +583,7 @@ class PortTab(ttk.Frame):
         self.hex_text = self._make_text(self.hex_fr)
 
         # 送信エリア
-        tx_frame = ttk.LabelFrame(vpane, text="送信", padding=2)
+        tx_frame = T(ttk.LabelFrame(vpane, padding=2), "tx_frame")
         vpane.add(tx_frame, weight=1)
 
         tx_top = ttk.Frame(tx_frame)
@@ -362,12 +591,11 @@ class PortTab(ttk.Frame):
         self.tx_mode_var = tk.StringVar(value="ascii")
         ttk.Radiobutton(tx_top, text="ASCII", variable=self.tx_mode_var,
                         value="ascii").pack(side="left")
-        ttk.Radiobutton(tx_top, text="HEX (例: AA BB 0D 0A)",
-                        variable=self.tx_mode_var, value="hex")\
-            .pack(side="left", padx=(8, 0))
-        ttk.Label(tx_top, text="  Ctrl+Enterで送信").pack(side="left")
-        ttk.Button(tx_top, text="送信", width=10,
-                   command=self.send_from_entry).pack(side="right")
+        T(ttk.Radiobutton(tx_top, variable=self.tx_mode_var, value="hex"),
+          "tx_hex_radio").pack(side="left", padx=(8, 0))
+        T(ttk.Label(tx_top), "tx_hint").pack(side="left")
+        T(ttk.Button(tx_top, width=10, command=self.send_from_entry),
+          "send").pack(side="right")
 
         self.tx_text = tk.Text(tx_frame, height=3, font=MONO_FONT,
                                undo=True, wrap="char")
@@ -376,15 +604,19 @@ class PortTab(ttk.Frame):
                           lambda e: (self.send_from_entry(), "break")[1])
 
         # 定型文エリア
-        macro_frame = ttk.LabelFrame(hpane, text="定型文 (ダブルクリックで送信)",
-                                     padding=2)
+        macro_frame = T(ttk.LabelFrame(hpane, padding=2), "macro_frame")
         hpane.add(macro_frame, weight=2)
 
         cols = ("mode", "data")
         self.macro_tree = ttk.Treeview(macro_frame, columns=cols, height=8)
-        self.macro_tree.heading("#0", text="名前")
-        self.macro_tree.heading("mode", text="形式")
-        self.macro_tree.heading("data", text="データ")
+
+        def relabel_macro_headings():
+            self.macro_tree.heading("#0", text=tr("m_name"))
+            self.macro_tree.heading("mode", text=tr("m_mode"))
+            self.macro_tree.heading("data", text=tr("m_data"))
+        relabel_macro_headings()
+        on_language_change(relabel_macro_headings)
+
         self.macro_tree.column("#0", width=110)
         self.macro_tree.column("mode", width=50, anchor="center")
         self.macro_tree.column("data", width=160)
@@ -393,21 +625,45 @@ class PortTab(ttk.Frame):
 
         mb = ttk.Frame(macro_frame)
         mb.pack(fill="x", pady=(2, 0))
-        for text, cmd in (("送信", self.send_macro),
-                          ("追加", self.add_macro),
-                          ("編集", self.edit_macro),
-                          ("削除", self.delete_macro),
-                          ("読込", self.load_macros),
-                          ("保存", self.save_macros)):
-            ttk.Button(mb, text=text, width=5, command=cmd)\
-                .pack(side="left", padx=1)
+        for key, cmd in (("send", self.send_macro),
+                         ("m_add", self.add_macro),
+                         ("m_edit", self.edit_macro),
+                         ("m_delete", self.delete_macro),
+                         ("m_load", self.load_macros),
+                         ("m_save", self.save_macros)):
+            T(ttk.Button(mb, width=7, command=cmd), key).pack(side="left", padx=1)
 
         self.macros = []      # [{name, mode, data, ending}, ...]
 
         # ---- ステータスバー ----
-        self.status_var = tk.StringVar(value="未接続")
+        self.status_var = tk.StringVar()
         ttk.Label(self, textvariable=self.status_var, anchor="w",
                   relief="sunken", padding=(6, 2)).pack(fill="x", side="bottom")
+
+        # 言語切替時に動的テキスト (接続ボタン・タブ名・ステータス) を更新
+        self._retranslate_dynamic()
+        on_language_change(self._retranslate)
+
+    def _retranslate_combos(self):
+        """送信改行/受信改行コンボの選択肢と現在値を現在言語で再生成する。"""
+        self.tx_eol_combo["values"] = [tr("eol_" + c) for c in TX_EOL_CODES]
+        self.tx_eol_var.set(tr("eol_" + self.tx_eol_code))
+        self.rx_nl_combo["values"] = [tr("rxnl_" + c) for c in RX_NEWLINE_CODES]
+        self.rx_nl_var.set(tr("rxnl_" + self.nl_filter.mode))
+
+    def _retranslate_dynamic(self):
+        connected = bool(self.ser and self.ser.is_open)
+        self.conn_btn.config(text=tr("disconnect" if connected else "connect"))
+        if not connected:
+            try:
+                self.notebook.tab(self, text=tr("not_connected"))
+            except tk.TclError:
+                pass        # まだ notebook に追加されていない
+        self._update_status()
+
+    def _retranslate(self):
+        self._retranslate_combos()
+        self._retranslate_dynamic()
 
     def _make_text(self, parent):
         fr = ttk.Frame(parent)
@@ -439,7 +695,8 @@ class PortTab(ttk.Frame):
     def connect(self):
         port = self.port_var.get().strip()
         if not port:
-            messagebox.showwarning("接続", "ポートを選択してください。", parent=self)
+            messagebox.showwarning(tr("mb_connect_title"), tr("mb_select_port"),
+                                   parent=self)
             return
         try:
             self.ser = serial.Serial(
@@ -451,13 +708,13 @@ class PortTab(ttk.Frame):
                 timeout=0.1,
             )
         except (serial.SerialException, ValueError, OSError) as e:
-            messagebox.showerror("接続エラー", str(e), parent=self)
+            messagebox.showerror(tr("mb_conn_err_title"), str(e), parent=self)
             self.ser = None
             return
         self.alive = True
         self.reader_thread = threading.Thread(target=self._reader, daemon=True)
         self.reader_thread.start()
-        self.conn_btn.config(text="切断")
+        self.conn_btn.config(text=tr("disconnect"))
         self.notebook.tab(self, text=port)
         self._update_status()
 
@@ -472,13 +729,13 @@ class PortTab(ttk.Frame):
             except Exception:
                 pass
             self.ser = None
-        self.conn_btn.config(text="接続")
+        self.conn_btn.config(text=tr("connect"))
         self._update_status()
 
     def close_tab(self):
         if self.ser and self.ser.is_open:
             if not messagebox.askokcancel(
-                    "確認", "ポートが開いています。切断してタブを閉じますか?",
+                    tr("mb_confirm_title"), tr("mb_close_confirm"),
                     parent=self):
                 return
         self.disconnect()
@@ -511,8 +768,8 @@ class PortTab(ttk.Frame):
             pass
         if disconnected:
             self.disconnect()
-            messagebox.showwarning("切断",
-                                   "ポートとの接続が失われました。", parent=self)
+            messagebox.showwarning(tr("mb_disconnect_title"),
+                                   tr("mb_conn_lost"), parent=self)
         self.after(50, self._poll_rx)
 
     # ----------------------------------------------------------- 受信処理 ----
@@ -600,8 +857,8 @@ class PortTab(ttk.Frame):
         try:
             self.decoder = codecs.getincrementaldecoder(enc)(errors="replace")
         except LookupError:
-            messagebox.showerror("エンコード", "未対応のエンコードです: " + enc,
-                                 parent=self)
+            messagebox.showerror(tr("mb_enc_title"),
+                                 tr("mb_enc_unsupported") + enc, parent=self)
             return
         self.nl_filter.reset()
         text = self.rx_raw.decode(enc, errors="replace")
@@ -614,7 +871,7 @@ class PortTab(ttk.Frame):
             self.rx_text.see("end")
 
     def _change_rx_newline(self):
-        self.nl_filter.mode = self.rx_nl_var.get()
+        self.nl_filter.mode = RX_NEWLINE_CODES[self.rx_nl_combo.current()]
         self._change_encoding()      # 表示を作り直す
 
     def clear_views(self):
@@ -626,8 +883,8 @@ class PortTab(ttk.Frame):
         self._hex_pending = bytearray()
         # 表示のみクリア。保存用バッファも消す場合は確認
         if self.rx_raw or self.tx_raw:
-            if messagebox.askyesno("クリア",
-                                   "保存用の送受信バッファも消去しますか?",
+            if messagebox.askyesno(tr("mb_clear_title"),
+                                   tr("mb_clear_buffers"),
                                    parent=self):
                 self.rx_raw = bytearray()
                 self.tx_raw = bytearray()
@@ -638,12 +895,13 @@ class PortTab(ttk.Frame):
 
     def _send_bytes(self, payload: bytes):
         if not (self.ser and self.ser.is_open):
-            messagebox.showwarning("送信", "ポートが開いていません。", parent=self)
+            messagebox.showwarning(tr("mb_send_title"), tr("mb_port_not_open"),
+                                   parent=self)
             return False
         try:
             self.ser.write(payload)
         except (serial.SerialException, OSError) as e:
-            messagebox.showerror("送信エラー", str(e), parent=self)
+            messagebox.showerror(tr("mb_send_err_title"), str(e), parent=self)
             return False
         self.tx_raw.extend(payload)
         self.session_log.append((datetime.now(), "TX", payload))
@@ -666,7 +924,7 @@ class PortTab(ttk.Frame):
             return parse_hex(data)
         payload = data.encode(self.enc_var.get(), errors="strict")
         if append_ending:
-            payload += LINE_ENDINGS[self.tx_eol_var.get()]
+            payload += TX_EOL_BYTES[self.tx_eol_code]
         return payload
 
     def send_from_entry(self):
@@ -677,7 +935,7 @@ class PortTab(ttk.Frame):
         try:
             payload = self._build_payload(mode, data)
         except (ValueError, UnicodeEncodeError, LookupError) as e:
-            messagebox.showerror("送信データエラー", str(e), parent=self)
+            messagebox.showerror(tr("mb_tx_data_err_title"), str(e), parent=self)
             return
         if self._send_bytes(payload):
             self.tx_text.delete("1.0", "end")
@@ -700,7 +958,7 @@ class PortTab(ttk.Frame):
                                    values=(m["mode"].upper(), preview))
 
     def add_macro(self):
-        dlg = MacroDialog(self, "定型文の追加")
+        dlg = MacroDialog(self, "dlg_macro_add")
         self.wait_window(dlg)
         if dlg.result:
             self.macros.append(dlg.result)
@@ -710,7 +968,7 @@ class PortTab(ttk.Frame):
         idx = self._selected_macro_index()
         if idx is None:
             return
-        dlg = MacroDialog(self, "定型文の編集", self.macros[idx])
+        dlg = MacroDialog(self, "dlg_macro_edit", self.macros[idx])
         self.wait_window(dlg)
         if dlg.result:
             self.macros[idx] = dlg.result
@@ -732,14 +990,14 @@ class PortTab(ttk.Frame):
             payload = self._build_payload(m["mode"], m["data"],
                                           append_ending=m.get("ending", True))
         except (ValueError, UnicodeEncodeError, LookupError) as e:
-            messagebox.showerror("定型文エラー", str(e), parent=self)
+            messagebox.showerror(tr("mb_macro_err_title"), str(e), parent=self)
             return
         self._send_bytes(payload)
 
     def save_macros(self):
         path = filedialog.asksaveasfilename(
             parent=self, defaultextension=".json",
-            filetypes=[("JSON", "*.json"), ("すべて", "*.*")],
+            filetypes=[(tr("ft_json"), "*.json"), (tr("ft_all"), "*.*")],
             initialfile="macros.json")
         if not path:
             return
@@ -748,7 +1006,8 @@ class PortTab(ttk.Frame):
 
     def load_macros(self):
         path = filedialog.askopenfilename(
-            parent=self, filetypes=[("JSON", "*.json"), ("すべて", "*.*")])
+            parent=self, filetypes=[(tr("ft_json"), "*.json"),
+                                    (tr("ft_all"), "*.*")])
         if not path:
             return
         try:
@@ -756,7 +1015,7 @@ class PortTab(ttk.Frame):
                 macros = json.load(f)
             assert isinstance(macros, list)
         except Exception as e:
-            messagebox.showerror("読込エラー", str(e), parent=self)
+            messagebox.showerror(tr("mb_load_err_title"), str(e), parent=self)
             return
         self.macros = macros
         self._refresh_macro_tree()
@@ -766,13 +1025,14 @@ class PortTab(ttk.Frame):
     def save_data(self, direction, fmt):
         buf = self.rx_raw if direction == "rx" else self.tx_raw
         if not buf:
-            messagebox.showinfo("保存", "保存するデータがありません。", parent=self)
+            messagebox.showinfo(tr("mb_save_title"), tr("mb_no_data"),
+                                parent=self)
             return
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         if fmt == "bin":
             path = filedialog.asksaveasfilename(
                 parent=self, defaultextension=".bin",
-                filetypes=[("バイナリ", "*.bin"), ("すべて", "*.*")],
+                filetypes=[(tr("ft_bin"), "*.bin"), (tr("ft_all"), "*.*")],
                 initialfile="%s_%s.bin" % (direction, stamp))
             if not path:
                 return
@@ -781,23 +1041,24 @@ class PortTab(ttk.Frame):
         else:
             path = filedialog.asksaveasfilename(
                 parent=self, defaultextension=".txt",
-                filetypes=[("テキスト", "*.txt"), ("すべて", "*.*")],
+                filetypes=[(tr("ft_txt"), "*.txt"), (tr("ft_all"), "*.*")],
                 initialfile="%s_%s.txt" % (direction, stamp))
             if not path:
                 return
             text = buf.decode(self.enc_var.get(), errors="replace")
             with open(path, "w", encoding="utf-8", newline="") as f:
                 f.write(text)
-        self.status_var.set("保存しました: " + path)
+        self.status_var.set(tr("st_saved") + path)
 
     def save_session_log(self):
         if not self.session_log:
-            messagebox.showinfo("保存", "ログがありません。", parent=self)
+            messagebox.showinfo(tr("mb_save_title"), tr("mb_no_log"),
+                                parent=self)
             return
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         path = filedialog.asksaveasfilename(
             parent=self, defaultextension=".log",
-            filetypes=[("ログ", "*.log"), ("すべて", "*.*")],
+            filetypes=[(tr("ft_log"), "*.log"), (tr("ft_all"), "*.*")],
             initialfile="session_%s.log" % stamp)
         if not path:
             return
@@ -816,7 +1077,7 @@ class PortTab(ttk.Frame):
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             path = filedialog.asksaveasfilename(
                 parent=self, defaultextension=".bin",
-                filetypes=[("バイナリ", "*.bin"), ("すべて", "*.*")],
+                filetypes=[(tr("ft_bin"), "*.bin"), (tr("ft_all"), "*.*")],
                 initialfile="rxlog_%s.bin" % stamp)
             if not path:
                 self.rawlog_var.set(False)
@@ -824,7 +1085,7 @@ class PortTab(ttk.Frame):
             try:
                 self.rawlog_fp = open(path, "ab")
             except OSError as e:
-                messagebox.showerror("ログ", str(e), parent=self)
+                messagebox.showerror(tr("mb_log_title"), str(e), parent=self)
                 self.rawlog_var.set(False)
         else:
             self._toggle_rawlog_off()
@@ -842,9 +1103,9 @@ class PortTab(ttk.Frame):
 
     def _update_status(self):
         if self.ser and self.ser.is_open:
-            s = "%s @ %s bps  接続中" % (self.ser.port, self.ser.baudrate)
+            s = tr("st_open_fmt") % (self.ser.port, self.ser.baudrate)
         else:
-            s = "未接続"
+            s = tr("not_connected")
         self.status_var.set("%s | RX: %d bytes  TX: %d bytes"
                             % (s, len(self.rx_raw), len(self.tx_raw)))
 
@@ -860,9 +1121,21 @@ class App(tk.Tk):
 
         bar = ttk.Frame(self, padding=(6, 4))
         bar.pack(fill="x")
-        ttk.Button(bar, text="＋ ポートタブを追加", command=self.add_tab)\
-            .pack(side="left")
-        ttk.Label(bar, text="  各タブが1つのCOMポートに対応します").pack(side="left")
+        T(ttk.Button(bar, command=self.add_tab), "add_tab").pack(side="left")
+        T(ttk.Label(bar), "tab_hint").pack(side="left")
+
+        # 言語切替 (右端)。各言語名はその言語で表記するため翻訳しない
+        self._lang_names = ["日本語", "English"]
+        self.lang_var = tk.StringVar(
+            value=self._lang_names[LANGUAGES.index(get_language())])
+        lang_cmb = ttk.Combobox(bar, textvariable=self.lang_var,
+                                values=self._lang_names, width=8,
+                                state="readonly")
+        lang_cmb.pack(side="right")
+        lang_cmb.bind("<<ComboboxSelected>>",
+                      lambda e: self.switch_language(
+                          LANGUAGES[lang_cmb.current()]))
+        T(ttk.Label(bar), "lang_label").pack(side="right")
 
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True)
@@ -870,9 +1143,19 @@ class App(tk.Tk):
         self.add_tab()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
+    def switch_language(self, lang: str):
+        if lang == get_language():
+            return
+        set_language(lang)
+        settings = load_settings()
+        settings["language"] = lang
+        save_settings(settings)
+        self.lang_var.set(self._lang_names[LANGUAGES.index(lang)])
+        retranslate_all()
+
     def add_tab(self):
         tab = PortTab(self.notebook, self)
-        self.notebook.add(tab, text="未接続")
+        self.notebook.add(tab, text=tr("not_connected"))
         self.notebook.select(tab)
 
     def remove_tab(self, tab):
@@ -891,6 +1174,10 @@ class App(tk.Tk):
 
 
 def main():
+    lang = load_settings().get("language")
+    if lang not in LANGUAGES:
+        lang = detect_default_language()
+    set_language(lang)
     App().mainloop()
 
 

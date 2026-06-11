@@ -13,6 +13,9 @@ dependencies = [
 serial-terminal = "serial_terminal:main"
 
 [dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
 build = [
     "pyinstaller>=6.0; python_version >= '3.10'",
 ]
