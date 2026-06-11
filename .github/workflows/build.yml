@@ -1,0 +1,61 @@
+name: Build
+
+on:
+  push:
+    tags: ["v*"]        # 例: git tag v0.1.0 && git push --tags で発火
+  workflow_dispatch:     # 手動実行も可能 (Actionsタブから)
+
+permissions:
+  contents: write        # Release へのアップロードに必要
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: SerialTerminal-windows
+            build: pyinstaller --onefile --windowed --name SerialTerminal serial_terminal.py
+            path: dist/SerialTerminal.exe
+          - os: macos-latest
+            artifact: SerialTerminal-macos
+            build: |
+              pyinstaller --onefile --windowed --name SerialTerminal serial_terminal.py
+              cd dist && zip -r SerialTerminal-macos.zip SerialTerminal.app
+            path: dist/SerialTerminal-macos.zip
+          - os: ubuntu-latest
+            artifact: SerialTerminal-linux
+            build: pyinstaller --onefile --name SerialTerminal serial_terminal.py
+            path: dist/SerialTerminal
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pyserial pyinstaller
+
+      - name: Install tk (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk
+
+      - name: Build
+        run: ${{ matrix.build }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.path }}
+
+      # タグpush時のみ GitHub Release に添付
+      - name: Attach to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.path }}
