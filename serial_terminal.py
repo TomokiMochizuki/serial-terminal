@@ -185,6 +185,13 @@ I18N = {
                             "en": "Odd number of hex digits: %r"},
     "err_hex_invalid":     {"ja": "HEXとして解釈できない文字が含まれています: %r",
                             "en": "Contains characters that cannot be parsed as hex: %r"},
+    "err_unprintable":     {"ja": "表示できない制御文字が含まれています: %r",
+                            "en": "Contains non-printable control characters: %r"},
+    "warn_convert_title":  {"ja": "形式変換", "en": "Format Conversion"},
+    "warn_to_hex_failed":  {"ja": "HEXに変換できませんでした:\n",
+                            "en": "Could not convert to HEX:\n"},
+    "warn_to_ascii_failed": {"ja": "テキストに変換できませんでした:\n",
+                             "en": "Could not convert to text:\n"},
     # --- ファイルダイアログのフィルタ名 ---
     "ft_json":  {"ja": "JSON", "en": "JSON"},
     "ft_all":   {"ja": "すべて", "en": "All files"},
@@ -297,6 +304,30 @@ def parse_hex(text: str) -> bytes:
         raise ValueError(tr("err_hex_invalid") % text)
 
 
+def ascii_to_hex_str(text: str, encoding: str = "utf-8") -> str:
+    """テキストを '61 62 63' 形式のスペース区切り小文字HEXに変換する。
+
+    エンコード不能な文字があれば UnicodeEncodeError を送出。
+    """
+    return " ".join("%02x" % b for b in text.encode(encoding, errors="strict"))
+
+
+def hex_str_to_ascii(text: str, encoding: str = "utf-8") -> str:
+    """HEX文字列をデコードしてテキストに変換する。
+
+    不正なHEX・デコード不能・表示不能な制御文字 (\\t \\r \\n は許容) を
+    含む場合は ValueError を送出。
+    """
+    data = parse_hex(text)
+    try:
+        decoded = data.decode(encoding, errors="strict")
+    except (UnicodeDecodeError, LookupError) as e:
+        raise ValueError(str(e))
+    if any(ord(ch) < 0x20 and ch not in "\t\r\n" for ch in decoded):
+        raise ValueError(tr("err_unprintable") % text)
+    return decoded
+
+
 def hexdump_lines(offset: int, data: bytes):
     """offset から始まる data を 16バイト/行 のHEXダンプ行リストにする。"""
     lines = []
@@ -351,14 +382,17 @@ class NewlineFilter:
 class MacroDialog(tk.Toplevel):
     """定型文の追加・編集用ダイアログ。"""
 
-    def __init__(self, master, title_key="dlg_macro_edit", macro=None):
+    def __init__(self, master, title_key="dlg_macro_edit", macro=None,
+                 encoding="utf-8"):
         super().__init__(master)
         self.title(tr(title_key))
         self.resizable(True, False)
         self.transient(master)
         self.grab_set()
         self.result = None
+        self.encoding = encoding
         macro = macro or {"name": "", "mode": "ascii", "data": "", "ending": True}
+        self._prev_mode = macro["mode"]
 
         frm = ttk.Frame(self, padding=10)
         frm.pack(fill="both", expand=True)
@@ -374,9 +408,11 @@ class MacroDialog(tk.Toplevel):
         mf = ttk.Frame(frm)
         mf.grid(row=1, column=1, sticky="w")
         ttk.Radiobutton(mf, text="ASCII", variable=self.mode_var,
-                        value="ascii").pack(side="left")
+                        value="ascii", command=self._mode_changed)\
+            .pack(side="left")
         ttk.Radiobutton(mf, text="HEX", variable=self.mode_var,
-                        value="hex").pack(side="left", padx=(8, 0))
+                        value="hex", command=self._mode_changed)\
+            .pack(side="left", padx=(8, 0))
 
         ttk.Label(frm, text=tr("d_data")).grid(row=2, column=0, sticky="nw", pady=(4, 0))
         self.data_text = tk.Text(frm, width=46, height=4, font=MONO_FONT)
@@ -395,6 +431,34 @@ class MacroDialog(tk.Toplevel):
 
         self.bind("<Escape>", lambda e: self.destroy())
         self.data_text.focus_set()
+
+    def _mode_changed(self):
+        """形式の切替時にデータ欄を ASCII↔HEX 相互変換する。
+
+        変換できない場合はデータを変更せず、ラジオを元の形式に戻す。
+        """
+        new_mode = self.mode_var.get()
+        if new_mode == self._prev_mode:
+            return
+        data = self.data_text.get("1.0", "end-1c")
+        if not data:
+            self._prev_mode = new_mode
+            return
+        try:
+            if new_mode == "hex":
+                converted = ascii_to_hex_str(data, self.encoding)
+            else:
+                converted = hex_str_to_ascii(data, self.encoding)
+        except (ValueError, UnicodeEncodeError, LookupError) as e:
+            key = ("warn_to_hex_failed" if new_mode == "hex"
+                   else "warn_to_ascii_failed")
+            messagebox.showwarning(tr("warn_convert_title"), tr(key) + str(e),
+                                   parent=self)
+            self.mode_var.set(self._prev_mode)
+            return
+        self.data_text.delete("1.0", "end")
+        self.data_text.insert("1.0", converted)
+        self._prev_mode = new_mode
 
     def _ok(self):
         name = self.name_var.get().strip()
@@ -958,7 +1022,7 @@ class PortTab(ttk.Frame):
                                    values=(m["mode"].upper(), preview))
 
     def add_macro(self):
-        dlg = MacroDialog(self, "dlg_macro_add")
+        dlg = MacroDialog(self, "dlg_macro_add", encoding=self.enc_var.get())
         self.wait_window(dlg)
         if dlg.result:
             self.macros.append(dlg.result)
@@ -968,7 +1032,8 @@ class PortTab(ttk.Frame):
         idx = self._selected_macro_index()
         if idx is None:
             return
-        dlg = MacroDialog(self, "dlg_macro_edit", self.macros[idx])
+        dlg = MacroDialog(self, "dlg_macro_edit", self.macros[idx],
+                          encoding=self.enc_var.get())
         self.wait_window(dlg)
         if dlg.result:
             self.macros[idx] = dlg.result

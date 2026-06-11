@@ -1,8 +1,15 @@
 # -*- coding: utf-8 -*-
 """定型文ダイアログの ASCII↔HEX 変換ロジックのテスト。"""
+import os
+import sys
+
 import pytest
 
 import serial_terminal as st
+
+needs_display = pytest.mark.skipif(
+    sys.platform not in ("win32", "darwin") and not os.environ.get("DISPLAY"),
+    reason="GUI test requires a display")
 
 
 class TestAsciiToHex:
@@ -64,3 +71,54 @@ class TestRoundTrip:
     def test_ascii_hex_ascii(self, text):
         hex_str = st.ascii_to_hex_str(text)
         assert st.hex_str_to_ascii(hex_str) == text
+
+
+@needs_display
+class TestMacroDialogConversion:
+    @pytest.fixture
+    def dialog(self):
+        import tkinter
+        root = tkinter.Tk()
+        root.withdraw()
+        dlg = st.MacroDialog(root, "dlg_macro_add", encoding="utf-8")
+        yield dlg
+        root.destroy()
+
+    def _switch(self, dlg, mode):
+        dlg.mode_var.set(mode)
+        dlg._mode_changed()
+
+    def _data(self, dlg):
+        return dlg.data_text.get("1.0", "end-1c")
+
+    def test_ascii_to_hex_rewrites_data(self, dialog):
+        dialog.data_text.insert("1.0", "abc")
+        self._switch(dialog, "hex")
+        assert self._data(dialog) == "61 62 63"
+
+    def test_hex_to_ascii_rewrites_data(self, dialog):
+        dialog.data_text.insert("1.0", "abc")
+        self._switch(dialog, "hex")
+        self._switch(dialog, "ascii")
+        assert self._data(dialog) == "abc"
+
+    def test_empty_data_no_conversion(self, dialog):
+        self._switch(dialog, "hex")
+        assert self._data(dialog) == ""
+        assert dialog._prev_mode == "hex"
+
+    def test_same_mode_click_is_noop(self, dialog):
+        dialog.data_text.insert("1.0", "abc")
+        self._switch(dialog, "ascii")
+        assert self._data(dialog) == "abc"
+
+    def test_failed_conversion_reverts_radio(self, dialog, monkeypatch):
+        # 不正なHEXをASCIIへ切替 → 警告を出しデータは保持、ラジオはHEXに戻る
+        monkeypatch.setattr(st.messagebox, "showwarning",
+                            lambda *a, **k: None)
+        dialog.data_text.insert("1.0", "zz")
+        dialog._prev_mode = "hex"
+        dialog.mode_var.set("hex")
+        self._switch(dialog, "ascii")
+        assert self._data(dialog) == "zz"
+        assert dialog.mode_var.get() == "hex"
