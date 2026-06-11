@@ -37,6 +37,27 @@ Windows 向けには PyInstaller でビルドした単体 `.exe` を配布して
 
 ## ソースから実行
 
+### uv (推奨)
+
+[uv](https://docs.astral.sh/uv/) があれば、リポジトリを clone して 1 コマンドで起動できます
+(Python 本体も依存ライブラリも自動で揃います)。
+
+```bash
+uv run serial-terminal
+```
+
+ターミナルで `serial-terminal` と打つだけで起動したい場合は、ツールとしてインストールします。
+
+```bash
+uv tool install .
+serial-terminal
+```
+
+> ソース更新後にツール版へ反映するには `uv tool install --force .` を再実行してください。
+> アンインストールは `uv tool uninstall serial-terminal`。
+
+### pip
+
 ```bash
 pip install pyserial
 python serial_terminal.py
@@ -47,11 +68,20 @@ python serial_terminal.py
 | 環境 | 補足 |
 |---|---|
 | Windows | Python 3.9+ (tkinter同梱)。ポートは `COM3` 等 |
-| Ubuntu | `sudo apt install python3-tk` が必要。シリアル権限: `sudo usermod -aG dialout $USER` (要再ログイン) |
+| Ubuntu | uv 利用時は tkinter 同梱の Python を自動取得するので追加パッケージ不要。pip 利用時は `sudo apt install python3-tk` が必要。シリアル権限: `sudo usermod -aG dialout $USER` (要再ログイン) |
 | WSL2 | WSLg (Windows 11) でGUI表示可。USBシリアルは [usbipd-win](https://github.com/dorssel/usbipd-win) で `usbipd attach --wsl` するとWSL側に `/dev/ttyUSB*` として見える |
 | macOS | ポート名は `/dev/cu.usbserial-*` 系。tkが古い場合は `brew install python-tk` |
 
 ## 自分でexeをビルドする (Windows)
+
+uv の場合:
+
+```powershell
+uv run --group build pyinstaller --onefile --windowed --name SerialTerminal serial_terminal.py
+# → dist\SerialTerminal.exe
+```
+
+pip の場合:
 
 ```powershell
 pip install pyserial pyinstaller

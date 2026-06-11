@@ -1,0 +1,25 @@
+[project]
+name = "serial-terminal"
+version = "0.1.0"
+description = "クロスプラットフォーム対応 シリアルポート バイナリ・ASCII 送受信エディタ"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+dependencies = [
+    "pyserial>=3.5",
+]
+
+[project.scripts]
+serial-terminal = "serial_terminal:main"
+
+[dependency-groups]
+build = [
+    "pyinstaller>=6.0; python_version >= '3.10'",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+include = ["serial_terminal.py"]
