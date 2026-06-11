@@ -65,6 +65,10 @@ class TestHexToAscii:
         with pytest.raises(ValueError):
             st.hex_str_to_ascii("61 00 62")
 
+    def test_del_char_raises(self):
+        with pytest.raises(ValueError):
+            st.hex_str_to_ascii("61 7f 62")
+
 
 class TestRoundTrip:
     @pytest.mark.parametrize("text", ["abc", "hello world", "a\nb\tc", "あいう"])
@@ -82,6 +86,7 @@ class TestMacroDialogConversion:
         root.withdraw()
         dlg = st.MacroDialog(root, "dlg_macro_add", encoding="utf-8")
         yield dlg
+        dlg.destroy()
         root.destroy()
 
     def _switch(self, dlg, mode):

@@ -234,7 +234,10 @@ def retranslate_all():
         try:
             cb()
         except tk.TclError:
-            _retranslate_callbacks.remove(cb)
+            try:
+                _retranslate_callbacks.remove(cb)
+            except ValueError:
+                pass
 
 
 def T(widget, key: str, option: str = "text"):
@@ -323,7 +326,8 @@ def hex_str_to_ascii(text: str, encoding: str = "utf-8") -> str:
         decoded = data.decode(encoding, errors="strict")
     except (UnicodeDecodeError, LookupError) as e:
         raise ValueError(str(e))
-    if any(ord(ch) < 0x20 and ch not in "\t\r\n" for ch in decoded):
+    if any((ord(ch) < 0x20 or ord(ch) == 0x7F) and ch not in "\t\r\n"
+           for ch in decoded):
         raise ValueError(tr("err_unprintable") % text)
     return decoded
 
@@ -1078,7 +1082,8 @@ class PortTab(ttk.Frame):
         try:
             with open(path, encoding="utf-8") as f:
                 macros = json.load(f)
-            assert isinstance(macros, list)
+            if not isinstance(macros, list):
+                raise ValueError("macros JSON must be a list")
         except Exception as e:
             messagebox.showerror(tr("mb_load_err_title"), str(e), parent=self)
             return
@@ -1135,7 +1140,7 @@ class PortTab(ttk.Frame):
                           .replace("\r", "\\r").replace("\n", "\\n")
                 f.write("%s  %s  [%s]  %s\n"
                         % (ts.strftime("%H:%M:%S.%f")[:-3], d, hexs, asc))
-        self.status_var.set("保存しました: " + path)
+        self.status_var.set(tr("st_saved") + path)
 
     def _toggle_rawlog(self):
         if self.rawlog_var.get():
