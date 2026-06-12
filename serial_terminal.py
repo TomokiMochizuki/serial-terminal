@@ -332,6 +332,39 @@ def hex_str_to_ascii(text: str, encoding: str = "utf-8") -> str:
     return decoded
 
 
+def convert_text_widget_mode(text_widget, mode_var, prev_mode, encoding,
+                             parent):
+    """形式切替時にテキスト欄を ASCII↔HEX 相互変換し、新しい形式を返す。
+
+    変換できない場合は警告を表示し、データを変更せずラジオを prev_mode に
+    戻して prev_mode を返す。
+    """
+    new_mode = mode_var.get()
+    if new_mode == prev_mode:
+        return prev_mode
+    data = text_widget.get("1.0", "end-1c")
+    if not data:
+        return new_mode
+    try:
+        if new_mode == "hex":
+            converted = ascii_to_hex_str(data, encoding)
+        else:
+            converted = hex_str_to_ascii(data, encoding)
+    except (ValueError, UnicodeEncodeError, LookupError) as e:
+        key = ("warn_to_hex_failed" if new_mode == "hex"
+               else "warn_to_ascii_failed")
+        messagebox.showwarning(tr("warn_convert_title"), tr(key) + str(e),
+                               parent=parent)
+        mode_var.set(prev_mode)
+        return prev_mode
+    # undo有効なウィジェットで delete+insert を1回のCtrl+Zで戻せるようにする
+    text_widget.edit_separator()
+    text_widget.delete("1.0", "end")
+    text_widget.insert("1.0", converted)
+    text_widget.edit_separator()
+    return new_mode
+
+
 def hexdump_lines(offset: int, data: bytes):
     """offset から始まる data を 16バイト/行 のHEXダンプ行リストにする。"""
     lines = []
@@ -441,28 +474,9 @@ class MacroDialog(tk.Toplevel):
 
         変換できない場合はデータを変更せず、ラジオを元の形式に戻す。
         """
-        new_mode = self.mode_var.get()
-        if new_mode == self._prev_mode:
-            return
-        data = self.data_text.get("1.0", "end-1c")
-        if not data:
-            self._prev_mode = new_mode
-            return
-        try:
-            if new_mode == "hex":
-                converted = ascii_to_hex_str(data, self.encoding)
-            else:
-                converted = hex_str_to_ascii(data, self.encoding)
-        except (ValueError, UnicodeEncodeError, LookupError) as e:
-            key = ("warn_to_hex_failed" if new_mode == "hex"
-                   else "warn_to_ascii_failed")
-            messagebox.showwarning(tr("warn_convert_title"), tr(key) + str(e),
-                                   parent=self)
-            self.mode_var.set(self._prev_mode)
-            return
-        self.data_text.delete("1.0", "end")
-        self.data_text.insert("1.0", converted)
-        self._prev_mode = new_mode
+        self._prev_mode = convert_text_widget_mode(
+            self.data_text, self.mode_var, self._prev_mode,
+            self.encoding, self)
 
     def _ok(self):
         name = self.name_var.get().strip()
@@ -657,9 +671,12 @@ class PortTab(ttk.Frame):
         tx_top = ttk.Frame(tx_frame)
         tx_top.pack(fill="x")
         self.tx_mode_var = tk.StringVar(value="ascii")
+        self._tx_prev_mode = "ascii"
         ttk.Radiobutton(tx_top, text="ASCII", variable=self.tx_mode_var,
-                        value="ascii").pack(side="left")
-        T(ttk.Radiobutton(tx_top, variable=self.tx_mode_var, value="hex"),
+                        value="ascii", command=self._tx_mode_changed)\
+            .pack(side="left")
+        T(ttk.Radiobutton(tx_top, variable=self.tx_mode_var, value="hex",
+                          command=self._tx_mode_changed),
           "tx_hex_radio").pack(side="left", padx=(8, 0))
         T(ttk.Label(tx_top), "tx_hint").pack(side="left")
         T(ttk.Button(tx_top, width=10, command=self.send_from_entry),
@@ -960,6 +977,15 @@ class PortTab(ttk.Frame):
         self._update_status()
 
     # ----------------------------------------------------------- 送信処理 ----
+
+    def _tx_mode_changed(self):
+        """送信形式の切替時に送信欄を ASCII↔HEX 相互変換する。
+
+        変換できない場合はデータを変更せず、ラジオを元の形式に戻す。
+        """
+        self._tx_prev_mode = convert_text_widget_mode(
+            self.tx_text, self.tx_mode_var, self._tx_prev_mode,
+            self.enc_var.get(), self)
 
     def _send_bytes(self, payload: bytes):
         if not (self.ser and self.ser.is_open):
