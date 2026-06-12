@@ -53,11 +53,22 @@ uv run serial-terminal
 ターミナルで `serial-terminal` と打つだけで起動したい場合は、ツールとしてインストールします。
 
 ```bash
+# Windows / macOS
 uv tool install .
+
+# Linux / WSL (システムPythonを指定すること)
+uv tool install . --python /usr/bin/python3
+
 serial-terminal
 ```
 
-> ソース更新後にツール版へ反映するには `uv tool install --force .` を再実行してください。
+> **Linux / WSL の注意:** `--python /usr/bin/python3` を付けないと uv 管理の
+> Python が使われ、その Tk は Xft 非対応のため日本語が文字化けします。
+> `pyproject.toml` の `python-preference = "system"` は `uv run` にのみ効き、
+> `uv tool install` には適用されません。
+>
+> ソース更新後にツール版へ反映するには `uv tool install --force .` (Linux/WSLでは
+> `--python /usr/bin/python3` も付ける) を再実行してください。
 > アンインストールは `uv tool uninstall serial-terminal`。
 
 ### pip
