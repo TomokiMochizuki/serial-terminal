@@ -26,6 +26,7 @@ import locale
 import os
 import queue
 import socket
+import sys
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -336,6 +337,56 @@ def parse_port_number(text: str) -> int:
     if not 1 <= port <= 65535:
         raise ValueError(tr("err_port_range") % text)
     return port
+
+
+def _serialcomm_ports() -> list[str]:
+    """Windows の HKLM\\HARDWARE\\DEVICEMAP\\SERIALCOMM を読み、
+    登録済みシリアルポート名(COM11 等)を列挙する。
+
+    pyserial の comports() は SetupAPI の「ポート(COM と LPT)」クラスのみを
+    列挙するため、com0com など独自バスクラスの仮想ポートを取りこぼす。
+    SERIALCOMM には実在/仮想を問わず登録されるため、補完に用いる。
+    """
+    if sys.platform != "win32":
+        return []
+    try:
+        import winreg
+    except ImportError:
+        return []
+    ports: list[str] = []
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"HARDWARE\DEVICEMAP\SERIALCOMM") as key:
+            i = 0
+            while True:
+                try:
+                    _name, value, _type = winreg.EnumValue(key, i)
+                except OSError:
+                    break
+                if value:
+                    ports.append(value)
+                i += 1
+    except OSError:
+        # SERIALCOMM キーが存在しない(ポートが1つもない)場合など
+        return []
+    return ports
+
+
+def list_serial_ports() -> list[str]:
+    """利用可能なシリアルポート名の一覧を返す。
+
+    pyserial の comports() に SERIALCOMM レジストリの内容をマージし、
+    com0com 等の仮想ポートも取りこぼさないようにする。
+    """
+    ports = [p.device for p in serial.tools.list_ports.comports()]
+    for dev in _serialcomm_ports():
+        if dev not in ports:
+            ports.append(dev)
+    # COM番号順に並べる(数値部分が取れないものは末尾)
+    def _sort_key(name: str):
+        digits = "".join(c for c in name if c.isdigit())
+        return (0, int(digits)) if digits else (1, name)
+    return sorted(ports, key=_sort_key)
 
 
 def parse_hex(text: str) -> bytes:
@@ -1212,7 +1263,7 @@ class PortTab(ttk.Frame):
     # ----------------------------------------------------------- ポート ----
 
     def refresh_ports(self):
-        ports = [p.device for p in serial.tools.list_ports.comports()]
+        ports = list_serial_ports()
         self.port_cmb["values"] = ports
         if ports and not self.port_var.get():
             self.port_var.set(ports[0])
