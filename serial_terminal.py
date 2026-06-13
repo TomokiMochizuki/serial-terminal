@@ -721,6 +721,68 @@ class TcpServerTransport(Transport):
         return self.description
 
 
+class UdpTransport(Transport):
+    """コネクションレスUDP。宛先へ sendto し、受信ポートで recvfrom する。"""
+
+    def __init__(self, dest_host, dest_port, local_port):
+        self.dest_host = dest_host
+        self.dest_port = dest_port
+        self.local_port = local_port
+        self._sock = None
+
+    def open(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("0.0.0.0", self.local_port))
+        except OSError as e:
+            sock.close()
+            raise TransportError(str(e))
+        self._sock = sock
+
+    def close(self):
+        if self._sock:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+            self._sock = None
+
+    def read(self, timeout):
+        sock = self._sock
+        if sock is None:
+            raise TransportError(tr("err_conn_closed"))
+        sock.settimeout(timeout)
+        try:
+            data, _addr = sock.recvfrom(UDP_BUFSIZE)
+        except socket.timeout:
+            return b""
+        except OSError as e:
+            raise TransportError(str(e))
+        return data
+
+    def write(self, data):
+        if self._sock is None:
+            raise TransportError(tr("err_conn_closed"))
+        try:
+            self._sock.sendto(data, (self.dest_host, self.dest_port))
+        except OSError as e:
+            raise TransportError(str(e))
+
+    @property
+    def is_open(self):
+        return self._sock is not None
+
+    @property
+    def description(self):
+        return tr("st_udp") % (self.local_port, self.dest_host,
+                               self.dest_port)
+
+    @property
+    def tab_label(self):
+        return "UDP:%d" % self.local_port
+
+
 class MacroDialog(tk.Toplevel):
     """定型文の追加・編集用ダイアログ。"""
 

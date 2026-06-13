@@ -197,3 +197,44 @@ class TestTcpServerTransport:
                 b.open()
         finally:
             a.close()
+
+
+class TestUdpTransport:
+    def test_bidirectional_roundtrip(self):
+        a_port = free_port(socket.SOCK_DGRAM)
+        b_port = free_port(socket.SOCK_DGRAM)
+        a = st.UdpTransport("127.0.0.1", b_port, a_port)
+        b = st.UdpTransport("127.0.0.1", a_port, b_port)
+        a.open()
+        b.open()
+        try:
+            a.write(b"\x01\x02")
+            assert b.read(1.0) == b"\x01\x02"
+            b.write(b"ok")
+            assert a.read(1.0) == b"ok"
+        finally:
+            a.close()
+            b.close()
+
+    def test_read_timeout_returns_empty(self):
+        t = st.UdpTransport("127.0.0.1", 9, free_port(socket.SOCK_DGRAM))
+        t.open()
+        try:
+            assert t.read(0.1) == b""
+        finally:
+            t.close()
+
+    def test_receives_from_any_sender(self):
+        local = free_port(socket.SOCK_DGRAM)
+        t = st.UdpTransport("127.0.0.1", 9, local)   # 宛先はダミー
+        t.open()
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.sendto(b"anon", ("127.0.0.1", local))
+            assert t.read(1.0) == b"anon"
+        finally:
+            t.close()
+
+    def test_tab_label(self):
+        t = st.UdpTransport("10.0.0.1", 5000, 6000)
+        assert t.tab_label == "UDP:6000"
