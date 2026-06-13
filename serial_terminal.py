@@ -897,12 +897,15 @@ class PortTab(ttk.Frame):
     # ---------------------------------------------------------------- UI ----
 
     def _build_ui(self):
+        saved = load_settings()
+
         # ---- 接続バー ----
         bar1 = ttk.Frame(self, padding=(6, 4))
         bar1.pack(fill="x")
 
         T(ttk.Label(bar1), "conn_type").pack(side="left")
-        self.conn_type_code = "serial"
+        code = saved.get("conn_type")
+        self.conn_type_code = code if code in CONN_TYPES else "serial"
         self.conn_type_cmb = ttk.Combobox(bar1, width=14, state="readonly")
         self.conn_type_cmb.pack(side="left", padx=(2, 8))
         self.conn_type_cmb.bind("<<ComboboxSelected>>",
@@ -911,9 +914,9 @@ class PortTab(ttk.Frame):
         # 種別ごとのパラメータフレーム (どれか1つだけ pack する)
         self.param_frames = {
             "serial":     self._build_serial_params(bar1),
-            "tcp_client": self._build_tcp_client_params(bar1),
-            "tcp_server": self._build_tcp_server_params(bar1),
-            "udp":        self._build_udp_params(bar1),
+            "tcp_client": self._build_tcp_client_params(bar1, saved),
+            "tcp_server": self._build_tcp_server_params(bar1, saved),
+            "udp":        self._build_udp_params(bar1, saved),
         }
 
         self.conn_btn = ttk.Button(bar1, width=10,
@@ -1118,38 +1121,42 @@ class PortTab(ttk.Frame):
                      width=4, state="readonly").pack(side="left", padx=(2, 8))
         return fr
 
-    def _build_tcp_client_params(self, parent):
+    def _build_tcp_client_params(self, parent, saved):
         fr = ttk.Frame(parent)
         T(ttk.Label(fr), "net_host").pack(side="left")
-        self.tcp_host_var = tk.StringVar(value="127.0.0.1")
+        self.tcp_host_var = tk.StringVar(
+            value=saved.get("tcp_host", "127.0.0.1"))
         ttk.Entry(fr, textvariable=self.tcp_host_var, width=18)\
             .pack(side="left", padx=(2, 8))
         T(ttk.Label(fr), "net_port").pack(side="left")
-        self.tcp_port_var = tk.StringVar(value="5000")
+        self.tcp_port_var = tk.StringVar(value=saved.get("tcp_port", "5000"))
         ttk.Entry(fr, textvariable=self.tcp_port_var, width=7)\
             .pack(side="left", padx=(2, 8))
         return fr
 
-    def _build_tcp_server_params(self, parent):
+    def _build_tcp_server_params(self, parent, saved):
         fr = ttk.Frame(parent)
         T(ttk.Label(fr), "listen_port").pack(side="left")
-        self.listen_port_var = tk.StringVar(value="5000")
+        self.listen_port_var = tk.StringVar(
+            value=saved.get("tcp_server_port", "5000"))
         ttk.Entry(fr, textvariable=self.listen_port_var, width=7)\
             .pack(side="left", padx=(2, 8))
         return fr
 
-    def _build_udp_params(self, parent):
+    def _build_udp_params(self, parent, saved):
         fr = ttk.Frame(parent)
         T(ttk.Label(fr), "udp_dest_host").pack(side="left")
-        self.udp_host_var = tk.StringVar(value="127.0.0.1")
+        self.udp_host_var = tk.StringVar(
+            value=saved.get("udp_host", "127.0.0.1"))
         ttk.Entry(fr, textvariable=self.udp_host_var, width=18)\
             .pack(side="left", padx=(2, 4))
         T(ttk.Label(fr), "udp_dest_port").pack(side="left")
-        self.udp_port_var = tk.StringVar(value="5000")
+        self.udp_port_var = tk.StringVar(value=saved.get("udp_port", "5000"))
         ttk.Entry(fr, textvariable=self.udp_port_var, width=7)\
             .pack(side="left", padx=(2, 8))
         T(ttk.Label(fr), "udp_local_port").pack(side="left")
-        self.udp_local_var = tk.StringVar(value="5000")
+        self.udp_local_var = tk.StringVar(
+            value=saved.get("udp_local_port", "5000"))
         ttk.Entry(fr, textvariable=self.udp_local_var, width=7)\
             .pack(side="left", padx=(2, 8))
         return fr
@@ -1256,6 +1263,7 @@ class PortTab(ttk.Frame):
                                  parent=self)
             return
         self.transport = transport
+        self._save_net_defaults()
         self.alive = True
         self.reader_thread = threading.Thread(target=self._reader, daemon=True)
         self.reader_thread.start()
@@ -1275,6 +1283,20 @@ class PortTab(ttk.Frame):
         self.conn_btn.config(text=tr("connect"))
         self.conn_type_cmb.config(state="readonly")
         self._update_status()
+
+    def _save_net_defaults(self):
+        """接続成功時のネットワーク設定を新規タブの既定値として保存する。"""
+        settings = load_settings()
+        settings.update({
+            "conn_type":       self.conn_type_code,
+            "tcp_host":        self.tcp_host_var.get(),
+            "tcp_port":        self.tcp_port_var.get(),
+            "tcp_server_port": self.listen_port_var.get(),
+            "udp_host":        self.udp_host_var.get(),
+            "udp_port":        self.udp_port_var.get(),
+            "udp_local_port":  self.udp_local_var.get(),
+        })
+        save_settings(settings)
 
     def _on_transport_status(self, transport):
         """受信スレッドからの状態変化通知をUIスレッドへ引き渡す。"""

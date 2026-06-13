@@ -89,3 +89,36 @@ class TestTransportConnection:
         tab.connect()
         assert tab.transport is None
         assert warnings
+
+
+@needs_display
+class TestNetworkSettingsPersistence:
+    def test_successful_connect_saves_defaults(self, tab):
+        _select_type(tab, "udp")
+        local = str(_free_udp_port())
+        tab.udp_host_var.set("127.0.0.1")
+        tab.udp_port_var.set("7777")
+        tab.udp_local_var.set(local)
+        tab.connect()
+        tab.disconnect()
+        s = st.load_settings()
+        assert s["conn_type"] == "udp"
+        assert s["udp_host"] == "127.0.0.1"
+        assert s["udp_port"] == "7777"
+        assert s["udp_local_port"] == local
+
+    def test_new_tab_restores_saved_defaults(self, tab):
+        st.save_settings({"conn_type": "tcp_client",
+                          "tcp_host": "10.1.2.3", "tcp_port": "1234"})
+        tab.app.add_tab()
+        new_tab = tab.app.nametowidget(tab.app.notebook.tabs()[-1])
+        assert new_tab.conn_type_code == "tcp_client"
+        assert new_tab.param_frames["tcp_client"].winfo_manager() == "pack"
+        assert new_tab.tcp_host_var.get() == "10.1.2.3"
+        assert new_tab.tcp_port_var.get() == "1234"
+
+    def test_invalid_saved_conn_type_falls_back_to_serial(self, tab):
+        st.save_settings({"conn_type": "bogus"})
+        tab.app.add_tab()
+        new_tab = tab.app.nametowidget(tab.app.notebook.tabs()[-1])
+        assert new_tab.conn_type_code == "serial"
