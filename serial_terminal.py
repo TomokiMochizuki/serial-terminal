@@ -873,7 +873,7 @@ class PortTab(ttk.Frame):
         self.notebook = notebook
         self.app = app
 
-        self.ser = None                       # serial.Serial
+        self.transport = None                 # Transport (接続中のみ非None)
         self.reader_thread = None
         self.alive = False
         self.rx_queue = queue.Queue()
@@ -1172,7 +1172,7 @@ class PortTab(ttk.Frame):
         self.rx_nl_var.set(tr("rxnl_" + self.nl_filter.mode))
 
     def _retranslate_dynamic(self):
-        connected = bool(self.ser and self.ser.is_open)
+        connected = bool(self.transport and self.transport.is_open)
         self.conn_btn.config(text=tr("disconnect" if connected else "connect"))
         if not connected:
             try:
@@ -1207,35 +1207,61 @@ class PortTab(ttk.Frame):
             self.port_var.set(ports[0])
 
     def toggle_connection(self):
-        if self.ser and self.ser.is_open:
+        if self.transport and self.transport.is_open:
             self.disconnect()
         else:
             self.connect()
 
-    def connect(self):
-        port = self.port_var.get().strip()
-        if not port:
-            messagebox.showwarning(tr("mb_connect_title"), tr("mb_select_port"),
-                                   parent=self)
-            return
-        try:
-            self.ser = serial.Serial(
+    def _make_transport(self):
+        """UI入力からTransportを構築する。入力不正は ValueError。"""
+        ctype = self.conn_type_code
+        if ctype == "serial":
+            port = self.port_var.get().strip()
+            if not port:
+                raise ValueError(tr("mb_select_port"))
+            return SerialTransport(
                 port=port,
                 baudrate=int(self.baud_var.get()),
                 bytesize=BYTESIZES[self.bits_var.get()],
                 parity=PARITIES[self.parity_var.get()],
-                stopbits=STOPBITS[self.stop_var.get()],
-                timeout=0.1,
-            )
-        except (serial.SerialException, ValueError, OSError) as e:
-            messagebox.showerror(tr("mb_conn_err_title"), str(e), parent=self)
-            self.ser = None
+                stopbits=STOPBITS[self.stop_var.get()])
+        if ctype == "tcp_client":
+            host = self.tcp_host_var.get().strip()
+            if not host:
+                raise ValueError(tr("err_host_required"))
+            return TcpClientTransport(
+                host, parse_port_number(self.tcp_port_var.get()))
+        if ctype == "tcp_server":
+            return TcpServerTransport(
+                parse_port_number(self.listen_port_var.get()),
+                on_status_change=self._on_transport_status)
+        host = self.udp_host_var.get().strip()
+        if not host:
+            raise ValueError(tr("err_host_required"))
+        return UdpTransport(host,
+                            parse_port_number(self.udp_port_var.get()),
+                            parse_port_number(self.udp_local_var.get()))
+
+    def connect(self):
+        try:
+            transport = self._make_transport()
+        except ValueError as e:
+            messagebox.showwarning(tr("mb_connect_title"), str(e),
+                                   parent=self)
             return
+        try:
+            transport.open()
+        except TransportError as e:
+            messagebox.showerror(tr("mb_conn_err_title"), str(e),
+                                 parent=self)
+            return
+        self.transport = transport
         self.alive = True
         self.reader_thread = threading.Thread(target=self._reader, daemon=True)
         self.reader_thread.start()
         self.conn_btn.config(text=tr("disconnect"))
-        self.notebook.tab(self, text=port)
+        self.conn_type_cmb.config(state="disabled")
+        self.notebook.tab(self, text=transport.tab_label)
         self._update_status()
 
     def disconnect(self):
@@ -1243,17 +1269,27 @@ class PortTab(ttk.Frame):
         if self.reader_thread:
             self.reader_thread.join(timeout=1.0)
             self.reader_thread = None
-        if self.ser:
-            try:
-                self.ser.close()
-            except Exception:
-                pass
-            self.ser = None
+        if self.transport:
+            self.transport.close()
+            self.transport = None
         self.conn_btn.config(text=tr("connect"))
+        self.conn_type_cmb.config(state="readonly")
         self._update_status()
 
+    def _on_transport_status(self, transport):
+        """受信スレッドからの状態変化通知をUIスレッドへ引き渡す。"""
+        def update():
+            if self.transport is not transport:
+                return
+            self.notebook.tab(self, text=transport.tab_label)
+            self._update_status()
+        try:
+            self.after(0, update)
+        except (tk.TclError, RuntimeError):
+            pass        # ウィンドウ破棄後の通知は無視
+
     def close_tab(self):
-        if self.ser and self.ser.is_open:
+        if self.transport and self.transport.is_open:
             if not messagebox.askokcancel(
                     tr("mb_confirm_title"), tr("mb_close_confirm"),
                     parent=self):
@@ -1263,12 +1299,11 @@ class PortTab(ttk.Frame):
         self.app.remove_tab(self)
 
     def _reader(self):
-        """受信スレッド: シリアルから読み出してキューへ。"""
-        while self.alive and self.ser:
+        """受信スレッド: トランスポートから読み出してキューへ。"""
+        while self.alive and self.transport:
             try:
-                n = self.ser.in_waiting
-                data = self.ser.read(n if n else 1)
-            except (serial.SerialException, OSError):
+                data = self.transport.read(READ_INTERVAL)
+            except TransportError:
                 self.rx_queue.put(None)         # 切断シグナル
                 break
             if data:
@@ -1423,13 +1458,13 @@ class PortTab(ttk.Frame):
             self.enc_var.get(), self)
 
     def _send_bytes(self, payload: bytes):
-        if not (self.ser and self.ser.is_open):
+        if not (self.transport and self.transport.is_open):
             messagebox.showwarning(tr("mb_send_title"), tr("mb_port_not_open"),
                                    parent=self)
             return False
         try:
-            self.ser.write(payload)
-        except (serial.SerialException, OSError) as e:
+            self.transport.write(payload)
+        except TransportError as e:
             messagebox.showerror(tr("mb_send_err_title"), str(e), parent=self)
             return False
         self.tx_raw.extend(payload)
@@ -1633,8 +1668,8 @@ class PortTab(ttk.Frame):
     # --------------------------------------------------------------- 状態 ----
 
     def _update_status(self):
-        if self.ser and self.ser.is_open:
-            s = tr("st_open_fmt") % (self.ser.port, self.ser.baudrate)
+        if self.transport and self.transport.is_open:
+            s = self.transport.description
         else:
             s = tr("not_connected")
         self.status_var.set("%s | RX: %d bytes  TX: %d bytes"

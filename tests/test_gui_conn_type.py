@@ -53,3 +53,39 @@ class TestConnTypeSwitch:
         assert "シリアル" in tab.conn_type_cmb["values"]
         tab.app.switch_language("en")
         assert "Serial" in tab.conn_type_cmb["values"]
+
+
+def _free_udp_port():
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@needs_display
+class TestTransportConnection:
+    def test_udp_connect_and_disconnect(self, tab):
+        # UDPはピア不要で接続(=ソケット作成)できる
+        _select_type(tab, "udp")
+        tab.udp_host_var.set("127.0.0.1")
+        tab.udp_port_var.set("9")
+        tab.udp_local_var.set(str(_free_udp_port()))
+        tab.connect()
+        try:
+            assert tab.transport is not None
+            assert tab.transport.is_open
+            assert str(tab.conn_type_cmb["state"]) == "disabled"
+        finally:
+            tab.disconnect()
+        assert tab.transport is None
+        assert str(tab.conn_type_cmb["state"]) == "readonly"
+
+    def test_invalid_port_shows_warning_not_crash(self, tab, monkeypatch):
+        warnings = []
+        monkeypatch.setattr(st.messagebox, "showwarning",
+                            lambda *a, **k: warnings.append(a))
+        _select_type(tab, "tcp_client")
+        tab.tcp_port_var.set("not-a-port")
+        tab.connect()
+        assert tab.transport is None
+        assert warnings
