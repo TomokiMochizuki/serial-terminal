@@ -24,6 +24,7 @@ import json
 import locale
 import os
 import queue
+import socket
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -58,6 +59,14 @@ TX_EOL_CODES = list(TX_EOL_BYTES)
 
 # 受信表示時の改行の扱い (内部コード)。表示文字列は tr("rxnl_<code>") で得る。
 RX_NEWLINE_CODES = ["raw", "cr_to_lf", "strip_cr"]
+
+# 接続種別 (内部コード)。表示文字列は tr("ct_<code>") で得る。
+CONN_TYPES = ["serial", "tcp_client", "tcp_server", "udp"]
+
+CONNECT_TIMEOUT = 5.0      # TCPクライアント接続タイムアウト (秒)
+READ_INTERVAL = 0.1        # 受信ポーリング間隔 (秒)
+RECV_BUFSIZE = 4096        # TCP受信バッファ
+UDP_BUFSIZE = 65535        # UDP受信バッファ (最大データグラム)
 
 PARITIES  = {"None": serial.PARITY_NONE,
              "Even": serial.PARITY_EVEN,
@@ -198,6 +207,31 @@ I18N = {
     "ft_bin":   {"ja": "バイナリ", "en": "Binary"},
     "ft_txt":   {"ja": "テキスト", "en": "Text"},
     "ft_log":   {"ja": "ログ", "en": "Log"},
+
+    # --- 接続種別 / ネットワーク ---
+    "conn_type":      {"ja": "種別:", "en": "Type:"},
+    "ct_serial":      {"ja": "シリアル", "en": "Serial"},
+    "ct_tcp_client":  {"ja": "TCPクライアント", "en": "TCP Client"},
+    "ct_tcp_server":  {"ja": "TCPサーバ", "en": "TCP Server"},
+    "ct_udp":         {"ja": "UDP", "en": "UDP"},
+    "net_host":       {"ja": "Host:", "en": "Host:"},
+    "net_port":       {"ja": "Port:", "en": "Port:"},
+    "listen_port":    {"ja": "待受Port:", "en": "Listen port:"},
+    "udp_dest_host":  {"ja": "宛先Host:", "en": "Dest host:"},
+    "udp_dest_port":  {"ja": "宛先Port:", "en": "Dest port:"},
+    "udp_local_port": {"ja": "受信Port:", "en": "Local port:"},
+    "st_listening":   {"ja": ":%d 待受中", "en": ":%d listening"},
+    "st_tcp_peer":    {"ja": ":%d ← %s 接続中", "en": ":%d ← %s connected"},
+    "st_tcp_client":  {"ja": "%s:%d 接続中", "en": "%s:%d connected"},
+    "st_udp":         {"ja": "UDP:%d → %s:%d", "en": "UDP:%d → %s:%d"},
+    "err_port_range": {"ja": "ポート番号は1〜65535の整数で指定してください: %s",
+                       "en": "Port number must be an integer 1-65535: %s"},
+    "err_host_required": {"ja": "Hostを入力してください。",
+                          "en": "Host is required."},
+    "err_no_client":  {"ja": "クライアントが接続されていません。",
+                       "en": "No client connected."},
+    "err_conn_closed": {"ja": "接続が切断されました。",
+                        "en": "Connection closed."},
 }
 
 _current_lang = "ja"

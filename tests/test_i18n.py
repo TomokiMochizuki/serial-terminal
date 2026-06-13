@@ -93,3 +93,12 @@ class TestEolCodes:
 
     def test_rx_newline_codes(self):
         assert st.RX_NEWLINE_CODES == ["raw", "cr_to_lf", "strip_cr"]
+
+
+class TestNetworkI18nKeys:
+    def test_conn_type_codes_have_labels(self):
+        for code in st.CONN_TYPES:
+            assert "ct_" + code in st.I18N, code
+
+    def test_conn_types_order(self):
+        assert st.CONN_TYPES == ["serial", "tcp_client", "tcp_server", "udp"]
