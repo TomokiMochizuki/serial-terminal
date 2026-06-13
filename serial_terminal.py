@@ -901,38 +901,30 @@ class PortTab(ttk.Frame):
         bar1 = ttk.Frame(self, padding=(6, 4))
         bar1.pack(fill="x")
 
-        T(ttk.Label(bar1), "port").pack(side="left")
-        self.port_var = tk.StringVar()
-        self.port_cmb = ttk.Combobox(bar1, textvariable=self.port_var, width=22)
-        self.port_cmb.pack(side="left", padx=(2, 2))
-        T(ttk.Button(bar1, width=7, command=self.refresh_ports),
-          "refresh").pack(side="left", padx=(0, 8))
+        T(ttk.Label(bar1), "conn_type").pack(side="left")
+        self.conn_type_code = "serial"
+        self.conn_type_cmb = ttk.Combobox(bar1, width=14, state="readonly")
+        self.conn_type_cmb.pack(side="left", padx=(2, 8))
+        self.conn_type_cmb.bind("<<ComboboxSelected>>",
+                                lambda e: self._change_conn_type())
 
-        ttk.Label(bar1, text="Baud:").pack(side="left")
-        self.baud_var = tk.StringVar(value="115200")
-        ttk.Combobox(bar1, textvariable=self.baud_var, values=BAUDRATES,
-                     width=8).pack(side="left", padx=(2, 8))
-
-        ttk.Label(bar1, text="Data:").pack(side="left")
-        self.bits_var = tk.StringVar(value="8")
-        ttk.Combobox(bar1, textvariable=self.bits_var, values=list(BYTESIZES),
-                     width=3, state="readonly").pack(side="left", padx=(2, 8))
-
-        ttk.Label(bar1, text="Parity:").pack(side="left")
-        self.parity_var = tk.StringVar(value="None")
-        ttk.Combobox(bar1, textvariable=self.parity_var, values=list(PARITIES),
-                     width=5, state="readonly").pack(side="left", padx=(2, 8))
-
-        ttk.Label(bar1, text="Stop:").pack(side="left")
-        self.stop_var = tk.StringVar(value="1")
-        ttk.Combobox(bar1, textvariable=self.stop_var, values=list(STOPBITS),
-                     width=4, state="readonly").pack(side="left", padx=(2, 8))
+        # 種別ごとのパラメータフレーム (どれか1つだけ pack する)
+        self.param_frames = {
+            "serial":     self._build_serial_params(bar1),
+            "tcp_client": self._build_tcp_client_params(bar1),
+            "tcp_server": self._build_tcp_server_params(bar1),
+            "udp":        self._build_udp_params(bar1),
+        }
 
         self.conn_btn = ttk.Button(bar1, width=10,
                                    command=self.toggle_connection)
         self.conn_btn.pack(side="left", padx=(4, 8))
 
-        T(ttk.Button(bar1, command=self.close_tab), "close_tab").pack(side="right")
+        T(ttk.Button(bar1, command=self.close_tab), "close_tab")\
+            .pack(side="right")
+
+        self.param_frames[self.conn_type_code]\
+            .pack(side="left", before=self.conn_btn)
 
         # ---- 設定バー ----
         bar2 = ttk.Frame(self, padding=(6, 0))
@@ -1096,8 +1088,84 @@ class PortTab(ttk.Frame):
         self._retranslate_dynamic()
         on_language_change(self._retranslate)
 
+    def _build_serial_params(self, parent):
+        fr = ttk.Frame(parent)
+        T(ttk.Label(fr), "port").pack(side="left")
+        self.port_var = tk.StringVar()
+        self.port_cmb = ttk.Combobox(fr, textvariable=self.port_var, width=22)
+        self.port_cmb.pack(side="left", padx=(2, 2))
+        T(ttk.Button(fr, width=7, command=self.refresh_ports),
+          "refresh").pack(side="left", padx=(0, 8))
+
+        ttk.Label(fr, text="Baud:").pack(side="left")
+        self.baud_var = tk.StringVar(value="115200")
+        ttk.Combobox(fr, textvariable=self.baud_var, values=BAUDRATES,
+                     width=8).pack(side="left", padx=(2, 8))
+
+        ttk.Label(fr, text="Data:").pack(side="left")
+        self.bits_var = tk.StringVar(value="8")
+        ttk.Combobox(fr, textvariable=self.bits_var, values=list(BYTESIZES),
+                     width=3, state="readonly").pack(side="left", padx=(2, 8))
+
+        ttk.Label(fr, text="Parity:").pack(side="left")
+        self.parity_var = tk.StringVar(value="None")
+        ttk.Combobox(fr, textvariable=self.parity_var, values=list(PARITIES),
+                     width=5, state="readonly").pack(side="left", padx=(2, 8))
+
+        ttk.Label(fr, text="Stop:").pack(side="left")
+        self.stop_var = tk.StringVar(value="1")
+        ttk.Combobox(fr, textvariable=self.stop_var, values=list(STOPBITS),
+                     width=4, state="readonly").pack(side="left", padx=(2, 8))
+        return fr
+
+    def _build_tcp_client_params(self, parent):
+        fr = ttk.Frame(parent)
+        T(ttk.Label(fr), "net_host").pack(side="left")
+        self.tcp_host_var = tk.StringVar(value="127.0.0.1")
+        ttk.Entry(fr, textvariable=self.tcp_host_var, width=18)\
+            .pack(side="left", padx=(2, 8))
+        T(ttk.Label(fr), "net_port").pack(side="left")
+        self.tcp_port_var = tk.StringVar(value="5000")
+        ttk.Entry(fr, textvariable=self.tcp_port_var, width=7)\
+            .pack(side="left", padx=(2, 8))
+        return fr
+
+    def _build_tcp_server_params(self, parent):
+        fr = ttk.Frame(parent)
+        T(ttk.Label(fr), "listen_port").pack(side="left")
+        self.listen_port_var = tk.StringVar(value="5000")
+        ttk.Entry(fr, textvariable=self.listen_port_var, width=7)\
+            .pack(side="left", padx=(2, 8))
+        return fr
+
+    def _build_udp_params(self, parent):
+        fr = ttk.Frame(parent)
+        T(ttk.Label(fr), "udp_dest_host").pack(side="left")
+        self.udp_host_var = tk.StringVar(value="127.0.0.1")
+        ttk.Entry(fr, textvariable=self.udp_host_var, width=18)\
+            .pack(side="left", padx=(2, 4))
+        T(ttk.Label(fr), "udp_dest_port").pack(side="left")
+        self.udp_port_var = tk.StringVar(value="5000")
+        ttk.Entry(fr, textvariable=self.udp_port_var, width=7)\
+            .pack(side="left", padx=(2, 8))
+        T(ttk.Label(fr), "udp_local_port").pack(side="left")
+        self.udp_local_var = tk.StringVar(value="5000")
+        ttk.Entry(fr, textvariable=self.udp_local_var, width=7)\
+            .pack(side="left", padx=(2, 8))
+        return fr
+
+    def _change_conn_type(self):
+        new_code = CONN_TYPES[self.conn_type_cmb.current()]
+        if new_code == self.conn_type_code:
+            return
+        self.param_frames[self.conn_type_code].pack_forget()
+        self.conn_type_code = new_code
+        self.param_frames[new_code].pack(side="left", before=self.conn_btn)
+
     def _retranslate_combos(self):
-        """送信改行/受信改行コンボの選択肢と現在値を現在言語で再生成する。"""
+        """種別/送信改行/受信改行コンボの選択肢と現在値を現在言語で再生成する。"""
+        self.conn_type_cmb["values"] = [tr("ct_" + c) for c in CONN_TYPES]
+        self.conn_type_cmb.current(CONN_TYPES.index(self.conn_type_code))
         self.tx_eol_combo["values"] = [tr("eol_" + c) for c in TX_EOL_CODES]
         self.tx_eol_var.set(tr("eol_" + self.tx_eol_code))
         self.rx_nl_combo["values"] = [tr("rxnl_" + c) for c in RX_NEWLINE_CODES]
