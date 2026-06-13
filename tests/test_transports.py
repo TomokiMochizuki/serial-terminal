@@ -121,3 +121,79 @@ class TestTcpClientTransport:
     def test_tab_label(self):
         t = st.TcpClientTransport("192.168.0.10", 5000)
         assert t.tab_label == "192.168.0.10:5000"
+
+
+def _pump_until(transport, predicate, rounds=50, timeout=0.1):
+    """read() を回して predicate が真になるまでのデータを集めて返す。"""
+    data = b""
+    for _ in range(rounds):
+        data += transport.read(timeout)
+        if predicate(data):
+            return data
+    return data
+
+
+class TestTcpServerTransport:
+    def test_accept_receive_and_reconnect(self):
+        events = []
+        port = free_port()
+        srv = st.TcpServerTransport(port, on_status_change=events.append)
+        srv.open()
+        try:
+            assert srv.is_open
+            # --- クライアント1接続 → 受信 ---
+            c1 = socket.create_connection(("127.0.0.1", port), timeout=2)
+            _pump_until(srv, lambda d: srv._conn is not None)
+            assert len(events) == 1           # 接続通知
+            c1.sendall(b"hello")
+            assert _pump_until(srv, lambda d: d) == b"hello"
+            # --- 切断 → 自動で再待受 ---
+            c1.close()
+            _pump_until(srv, lambda d: srv._conn is None)
+            assert len(events) == 2           # 切断通知
+            # --- クライアント2が再接続できる ---
+            c2 = socket.create_connection(("127.0.0.1", port), timeout=2)
+            _pump_until(srv, lambda d: srv._conn is not None)
+            c2.sendall(b"again")
+            assert _pump_until(srv, lambda d: d) == b"again"
+            c2.close()
+        finally:
+            srv.close()
+        assert not srv.is_open
+
+    def test_second_client_rejected(self):
+        port = free_port()
+        srv = st.TcpServerTransport(port)
+        srv.open()
+        try:
+            c1 = socket.create_connection(("127.0.0.1", port), timeout=2)
+            _pump_until(srv, lambda d: srv._conn is not None)
+            c2 = socket.create_connection(("127.0.0.1", port), timeout=2)
+            _pump_until(srv, lambda d: False, rounds=5)  # 拒否処理を回す
+            c2.settimeout(2)
+            assert c2.recv(1) == b""          # サーバ側から即クローズされた
+            c1.close()
+            c2.close()
+        finally:
+            srv.close()
+
+    def test_write_without_client_raises(self):
+        port = free_port()
+        srv = st.TcpServerTransport(port)
+        srv.open()
+        try:
+            with pytest.raises(st.TransportError):
+                srv.write(b"x")
+        finally:
+            srv.close()
+
+    def test_bind_conflict_raises(self):
+        port = free_port()
+        a = st.TcpServerTransport(port)
+        a.open()
+        try:
+            b = st.TcpServerTransport(port)
+            with pytest.raises(st.TransportError):
+                b.open()
+        finally:
+            a.close()

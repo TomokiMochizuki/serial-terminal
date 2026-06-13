@@ -612,6 +612,115 @@ class TcpClientTransport(Transport):
         return "%s:%d" % (self.host, self.port)
 
 
+class TcpServerTransport(Transport):
+    """1クライアントのみ受け入れるTCPサーバ。
+
+    接続中の新規接続は即クローズで拒否し、クライアント切断後は自動で
+    待ち受けに戻る。接続/切断は on_status_change(self) で通知する
+    (受信スレッドから呼ばれる点に注意)。
+    """
+
+    def __init__(self, listen_port, on_status_change=None):
+        self.listen_port = listen_port
+        self.on_status_change = on_status_change
+        self._listen_sock = None
+        self._conn = None
+        self._peer = None
+
+    def open(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("0.0.0.0", self.listen_port))
+            sock.listen(1)
+        except OSError as e:
+            sock.close()
+            raise TransportError(str(e))
+        self._listen_sock = sock
+
+    def close(self):
+        self._drop_client(notify=False)
+        if self._listen_sock:
+            try:
+                self._listen_sock.close()
+            except OSError:
+                pass
+            self._listen_sock = None
+
+    def _drop_client(self, notify=True):
+        if self._conn:
+            try:
+                self._conn.close()
+            except OSError:
+                pass
+            self._conn = None
+            self._peer = None
+            if notify and self.on_status_change:
+                self.on_status_change(self)
+
+    def _reject_pending(self):
+        """接続中に来た新規接続を即クローズで拒否する。"""
+        self._listen_sock.settimeout(0)
+        try:
+            extra, _ = self._listen_sock.accept()
+            extra.close()
+        except OSError:
+            pass
+
+    def read(self, timeout):
+        if self._listen_sock is None:
+            raise TransportError(tr("err_conn_closed"))
+        if self._conn is None:
+            # 待受中: timeout 付きで accept を試みる
+            self._listen_sock.settimeout(timeout)
+            try:
+                conn, addr = self._listen_sock.accept()
+            except socket.timeout:
+                return b""
+            except OSError as e:
+                raise TransportError(str(e))
+            self._conn, self._peer = conn, addr
+            if self.on_status_change:
+                self.on_status_change(self)
+            return b""
+        self._reject_pending()
+        self._conn.settimeout(timeout)
+        try:
+            data = self._conn.recv(RECV_BUFSIZE)
+        except socket.timeout:
+            return b""
+        except OSError:
+            self._drop_client()
+            return b""
+        if not data:
+            self._drop_client()      # 切断 → 再待受へ
+            return b""
+        return data
+
+    def write(self, data):
+        if self._conn is None:
+            raise TransportError(tr("err_no_client"))
+        try:
+            self._conn.sendall(data)
+        except OSError as e:
+            raise TransportError(str(e))
+
+    @property
+    def is_open(self):
+        return self._listen_sock is not None
+
+    @property
+    def description(self):
+        if self._peer:
+            return tr("st_tcp_peer") % (self.listen_port,
+                                        "%s:%d" % self._peer)
+        return tr("st_listening") % self.listen_port
+
+    @property
+    def tab_label(self):
+        return self.description
+
+
 class MacroDialog(tk.Toplevel):
     """定型文の追加・編集用ダイアログ。"""
 
