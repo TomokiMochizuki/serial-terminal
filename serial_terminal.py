@@ -461,6 +461,98 @@ class NewlineFilter:
 
 # ------------------------------------------------------- 定型文編集ダイアログ ----
 
+# ---------------------------------------------------------- トランスポート ----
+
+class TransportError(Exception):
+    """通信の確立・送受信に失敗したことを示す。"""
+
+
+class Transport:
+    """通信方式 (シリアル/TCP/UDP) の共通インターフェース。
+
+    read() は受信スレッドから呼ばれる。タイムアウト時は b"" を返し、
+    切断・エラー時は TransportError を送出する。
+    """
+
+    def open(self):
+        raise NotImplementedError
+
+    def close(self):
+        raise NotImplementedError
+
+    def read(self, timeout: float) -> bytes:
+        raise NotImplementedError
+
+    def write(self, data: bytes):
+        raise NotImplementedError
+
+    @property
+    def is_open(self) -> bool:
+        raise NotImplementedError
+
+    @property
+    def description(self) -> str:
+        """ステータスバー用の表示文字列。"""
+        raise NotImplementedError
+
+    @property
+    def tab_label(self) -> str:
+        """タブ名用の短い表示文字列。既定は description と同じ。"""
+        return self.description
+
+
+class SerialTransport(Transport):
+    """serial.Serial をラップする。port には loop:// 等のURLも指定可能。"""
+
+    def __init__(self, port, baudrate, bytesize, parity, stopbits):
+        self.port = port
+        self.baudrate = baudrate
+        self._kwargs = dict(baudrate=baudrate, bytesize=bytesize,
+                            parity=parity, stopbits=stopbits)
+        self._ser = None
+
+    def open(self):
+        try:
+            self._ser = serial.serial_for_url(self.port, timeout=READ_INTERVAL,
+                                              **self._kwargs)
+        except (serial.SerialException, ValueError, OSError) as e:
+            raise TransportError(str(e))
+
+    def close(self):
+        if self._ser:
+            try:
+                self._ser.close()
+            except Exception:
+                pass
+            self._ser = None
+
+    def read(self, timeout):
+        # タイムアウトはコンストラクタの timeout= が担うため引数は未使用
+        try:
+            n = self._ser.in_waiting
+            return self._ser.read(n if n else 1)
+        except (serial.SerialException, OSError) as e:
+            raise TransportError(str(e))
+
+    def write(self, data):
+        try:
+            self._ser.write(data)
+        except (serial.SerialException, OSError) as e:
+            raise TransportError(str(e))
+
+    @property
+    def is_open(self):
+        return bool(self._ser and self._ser.is_open)
+
+    @property
+    def description(self):
+        return tr("st_open_fmt") % (self.port, self.baudrate)
+
+    @property
+    def tab_label(self):
+        return self.port
+
+
 class MacroDialog(tk.Toplevel):
     """定型文の追加・編集用ダイアログ。"""
 
