@@ -326,6 +326,17 @@ def save_settings(settings: dict):
 
 # ----------------------------------------------------------- ユーティリティ ----
 
+def parse_port_number(text: str) -> int:
+    """ポート番号文字列を検証して int を返す。不正なら ValueError。"""
+    try:
+        port = int(text.strip())
+    except ValueError:
+        raise ValueError(tr("err_port_range") % text)
+    if not 1 <= port <= 65535:
+        raise ValueError(tr("err_port_range") % text)
+    return port
+
+
 def parse_hex(text: str) -> bytes:
     """'AA BB 0d,0x0A' のような文字列を bytes に変換する。"""
     cleaned = (text.replace("0x", " ").replace("0X", " ")
