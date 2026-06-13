@@ -11,12 +11,13 @@ Serial Binary/ASCII Terminal
 
 機能:
  1. ASCII送信欄と受信ビューを分離。受信バイナリ(HEXダンプ)ビューを選択的に表示可能
- 2. 1アプリ内でCOMポートごとにタブを作成(複数ポート同時運用)
- 3. 定型文(ASCII / HEX どちらの形式でも登録・送信可能、JSONで保存/読込)
- 4. 送信時の改行 (なし / \n / \r / \r\n) と受信時の改行表示の扱いを設定可能
- 5. ボーレート・データビット・パリティ・ストップビット変更可能
- 6. 送受信データの保存 (受信: バイナリ/テキスト選択可、送信: バイナリ、全ログ、連続RAWログ)
- 7. 文字エンコード選択 (UTF-8 / Shift_JIS / EUC-JP / ASCII / Latin-1 / UTF-16)
+ 2. 1アプリ内で接続ごとにタブを作成(複数接続同時運用)
+ 3. 接続種別をシリアル / TCPクライアント / TCPサーバ / UDP から選択可能
+ 4. 定型文(ASCII / HEX どちらの形式でも登録・送信可能、JSONで保存/読込)
+ 5. 送信時の改行 (なし / \n / \r / \r\n) と受信時の改行表示の扱いを設定可能
+ 6. ボーレート・データビット・パリティ・ストップビット変更可能
+ 7. 送受信データの保存 (受信: バイナリ/テキスト選択可、送信: バイナリ、全ログ、連続RAWログ)
+ 8. 文字エンコード選択 (UTF-8 / Shift_JIS / EUC-JP / ASCII / Latin-1 / UTF-16)
 """
 
 import codecs
@@ -866,7 +867,10 @@ class MacroDialog(tk.Toplevel):
 # -------------------------------------------------------------- ポートタブ ----
 
 class PortTab(ttk.Frame):
-    """1つのシリアルポートに対応するタブ。"""
+    """1つの接続 (シリアル/TCP/UDP) に対応するタブ。"""
+
+    # rx_queue に積む状態変化センチネル (受信データ・切断シグナルと区別する)
+    _STATUS_CHANGED = object()
 
     def __init__(self, notebook: ttk.Notebook, app):
         super().__init__(notebook)
@@ -1299,16 +1303,18 @@ class PortTab(ttk.Frame):
         save_settings(settings)
 
     def _on_transport_status(self, transport):
-        """受信スレッドからの状態変化通知をUIスレッドへ引き渡す。"""
-        def update():
-            if self.transport is not transport:
-                return
-            self.notebook.tab(self, text=transport.tab_label)
+        """受信スレッドからの状態変化通知。
+
+        Tk の after() を別スレッドから呼ぶのは不安定なため、スレッド安全な
+        rx_queue にセンチネルを積み、UIスレッドの _poll_rx で反映する。
+        """
+        self.rx_queue.put(self._STATUS_CHANGED)
+
+    def _refresh_after_status(self):
+        """状態変化センチネル受信時にUIスレッドでタブ名/ステータスを更新する。"""
+        if self.transport:
+            self.notebook.tab(self, text=self.transport.tab_label)
             self._update_status()
-        try:
-            self.after(0, update)
-        except (tk.TclError, RuntimeError):
-            pass        # ウィンドウ破棄後の通知は無視
 
     def close_tab(self):
         if self.transport and self.transport.is_open:
@@ -1340,6 +1346,9 @@ class PortTab(ttk.Frame):
                 if data is None:
                     disconnected = True
                     break
+                if data is self._STATUS_CHANGED:
+                    self._refresh_after_status()
+                    continue
                 self._handle_rx(data)
         except queue.Empty:
             pass

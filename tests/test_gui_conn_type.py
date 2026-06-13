@@ -122,3 +122,45 @@ class TestNetworkSettingsPersistence:
         tab.app.add_tab()
         new_tab = tab.app.nametowidget(tab.app.notebook.tabs()[-1])
         assert new_tab.conn_type_code == "serial"
+
+
+@needs_display
+class TestTcpServerStatusLabel:
+    """TCPサーバの接続/切断がUIスレッドに正しく反映されること
+    (受信スレッドからの状態通知はメインスレッドで処理する必要がある)。"""
+
+    def test_peer_connection_updates_tab_label(self, tab):
+        import socket
+        import time
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        _select_type(tab, "tcp_server")
+        tab.listen_port_var.set(str(port))
+        tab.connect()
+        try:
+            c = socket.create_connection(("127.0.0.1", port), timeout=2)
+            connected_label = None
+            for _ in range(60):
+                tab.app.update()
+                time.sleep(0.05)
+                lbl = tab.notebook.tab(tab, "text")
+                if "←" in lbl:        # "←" を含む = 接続中表示
+                    connected_label = lbl
+                    break
+            assert connected_label is not None, \
+                "接続中のタブ名がUIに反映されなかった"
+            # --- 切断 → 待受表示へ戻る ---
+            c.close()
+            relisten_label = None
+            for _ in range(60):
+                tab.app.update()
+                time.sleep(0.05)
+                lbl = tab.notebook.tab(tab, "text")
+                if "←" not in lbl and tab.transport._conn is None:
+                    relisten_label = lbl
+                    break
+            assert relisten_label is not None, \
+                "切断後の待受表示がUIに反映されなかった"
+        finally:
+            tab.disconnect()
