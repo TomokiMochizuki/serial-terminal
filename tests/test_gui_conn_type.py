@@ -13,7 +13,7 @@ needs_display = pytest.mark.skipif(
 
 
 @pytest.fixture
-def tab(tmp_path, monkeypatch):
+def tab(tmp_path, monkeypatch, _gui_capture_safe):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("APPDATA", str(tmp_path))
     st.set_language("ja")
