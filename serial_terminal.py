@@ -682,7 +682,11 @@ class TcpServerTransport(Transport):
     def open(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # Windows の SO_REUSEADDR は Unix の SO_REUSEPORT 相当で、同一
+            # ポートへの多重バインド(ポート乗っ取り)を許してしまう。Unix の
+            # TIME_WAIT 再バインド問題回避のための設定なので非Windowsに限定する。
+            if sys.platform != "win32":
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("0.0.0.0", self.listen_port))
             sock.listen(1)
         except OSError as e:
@@ -785,7 +789,10 @@ class UdpTransport(Transport):
     def open(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # TCPサーバと同じ理由でWindowsでは設定しない(同一ローカルポートへの
+            # 多重バインドを防ぐ)。
+            if sys.platform != "win32":
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("0.0.0.0", self.local_port))
         except OSError as e:
             sock.close()
