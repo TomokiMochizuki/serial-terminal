@@ -553,6 +553,65 @@ class SerialTransport(Transport):
         return self.port
 
 
+class TcpClientTransport(Transport):
+    """リモートのTCPサーバへ接続するクライアント。"""
+
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+        self._sock = None
+
+    def open(self):
+        try:
+            self._sock = socket.create_connection(
+                (self.host, self.port), timeout=CONNECT_TIMEOUT)
+        except OSError as e:
+            raise TransportError(str(e))
+
+    def close(self):
+        if self._sock:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+            self._sock = None
+
+    def read(self, timeout):
+        sock = self._sock
+        if sock is None:
+            raise TransportError(tr("err_conn_closed"))
+        sock.settimeout(timeout)
+        try:
+            data = sock.recv(RECV_BUFSIZE)
+        except socket.timeout:
+            return b""
+        except OSError as e:
+            raise TransportError(str(e))
+        if not data:
+            raise TransportError(tr("err_conn_closed"))
+        return data
+
+    def write(self, data):
+        if self._sock is None:
+            raise TransportError(tr("err_conn_closed"))
+        try:
+            self._sock.sendall(data)
+        except OSError as e:
+            raise TransportError(str(e))
+
+    @property
+    def is_open(self):
+        return self._sock is not None
+
+    @property
+    def description(self):
+        return tr("st_tcp_client") % (self.host, self.port)
+
+    @property
+    def tab_label(self):
+        return "%s:%d" % (self.host, self.port)
+
+
 class MacroDialog(tk.Toplevel):
     """定型文の追加・編集用ダイアログ。"""
 

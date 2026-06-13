@@ -69,3 +69,55 @@ class TestSerialTransport:
     def test_tab_label_is_port_name(self):
         t = self._make("loop://")
         assert t.tab_label == "loop://"
+
+
+class TestTcpClientTransport:
+    def test_roundtrip_and_disconnect(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            port = listener.getsockname()[1]
+
+            t = st.TcpClientTransport("127.0.0.1", port)
+            t.open()
+            try:
+                assert t.is_open
+                conn, _ = listener.accept()
+                with conn:
+                    t.write(b"ping")
+                    assert conn.recv(4) == b"ping"
+                    conn.sendall(b"pong")
+                    data = b""
+                    for _ in range(20):
+                        data += t.read(0.1)
+                        if data:
+                            break
+                    assert data == b"pong"
+                # 相手側クローズ → 切断検知 (recv が b"" を返す)
+                with pytest.raises(st.TransportError):
+                    for _ in range(20):
+                        t.read(0.1)
+            finally:
+                t.close()
+
+    def test_read_timeout_returns_empty(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            t = st.TcpClientTransport("127.0.0.1",
+                                      listener.getsockname()[1])
+            t.open()
+            try:
+                assert t.read(0.1) == b""
+            finally:
+                t.close()
+
+    def test_connection_refused_raises(self):
+        port = free_port()  # bindしただけで閉じたポート → 接続拒否
+        t = st.TcpClientTransport("127.0.0.1", port)
+        with pytest.raises(st.TransportError):
+            t.open()
+
+    def test_tab_label(self):
+        t = st.TcpClientTransport("192.168.0.10", 5000)
+        assert t.tab_label == "192.168.0.10:5000"
